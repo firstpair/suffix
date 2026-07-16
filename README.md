@@ -49,6 +49,10 @@ suffix rm <shortcut-id> --version <version>
 suffix stats <shortcut-id> --days 30
 
 suffix domain ls
+suffix domain ls --stats
+suffix domain ls --json
+suffix domain ls --yaml
+suffix domain ls --xml
 suffix domain add go.example.com
 suffix domain rm <domain-id>
 
@@ -59,6 +63,8 @@ suffix account rm work
 ```
 
 `suffix ls` prints tab-separated `shortcut<TAB>target`; `--stats` adds visits as the third column. `--json`, `--yaml`, and `--xml` emit the same normalized shortcut records in structured form.
+
+`suffix domain ls` prints tab-separated `domain<TAB>status`; `--stats` adds aggregate shortcut visits as the third column. `--json`, `--yaml`, and `--xml` emit verbose normalized domain records.
 
 ## Development
 

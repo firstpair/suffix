@@ -91,6 +91,22 @@ struct ListArgs {
 }
 
 #[derive(Args)]
+struct DomainListArgs {
+    /// Emit formatted JSON.
+    #[arg(long)]
+    json: bool,
+    /// Emit formatted XML.
+    #[arg(long)]
+    xml: bool,
+    /// Emit formatted YAML.
+    #[arg(long)]
+    yaml: bool,
+    /// Include aggregate visit counts for shortcuts on each domain.
+    #[arg(long)]
+    stats: bool,
+}
+
+#[derive(Args)]
 struct AddArgs {
     /// Add a domain instead of a shortcut. Prefer `suffix domain add HOST`.
     #[arg(long, hide = true)]
@@ -128,7 +144,7 @@ struct DomainArgs {
 #[derive(Subcommand)]
 enum DomainCliCommand {
     /// List domains.
-    Ls,
+    Ls(DomainListArgs),
     /// Add a domain.
     Add { hostname: String },
     /// Remove an empty domain.
@@ -251,6 +267,27 @@ struct ShortcutRow {
     visits: Option<u64>,
 }
 
+#[derive(Debug, Serialize)]
+struct DomainRow {
+    id: String,
+    hostname: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vercel_verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vercel_misconfigured: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_checked_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visits: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputFormat {
     Text,
@@ -276,7 +313,7 @@ fn main() -> Result<()> {
         Command::Domain(args) => {
             let api = Api::from_config()?;
             match args.command {
-                DomainCliCommand::Ls => api.get("domains"),
+                DomainCliCommand::Ls(args) => list_domains(&api, args),
                 DomainCliCommand::Add { hostname } => {
                     api.post("domains", json!({ "hostname": hostname }))
                 }
@@ -441,11 +478,29 @@ fn add(args: AddArgs) -> Result<()> {
 fn list_shortcuts(api: &Api, args: ListArgs) -> Result<()> {
     let payload = api.request_json(api.client.get(api.url("shortcuts")?))?;
     let rows = shortcut_rows(&payload, args.stats)?;
-    match output_format(&args)? {
+    match output_format(args.json, args.xml, args.yaml)? {
         OutputFormat::Text => print_shortcut_table(&rows),
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&rows)?),
         OutputFormat::Yaml => print!("{}", shortcuts_yaml(&rows)),
         OutputFormat::Xml => print!("{}", shortcuts_xml(&rows)),
+    }
+    Ok(())
+}
+
+fn list_domains(api: &Api, args: DomainListArgs) -> Result<()> {
+    let payload = api.request_json(api.client.get(api.url("domains")?))?;
+    let visits = if args.stats {
+        let shortcuts = api.request_json(api.client.get(api.url("shortcuts")?))?;
+        Some(domain_visit_counts(&shortcuts)?)
+    } else {
+        None
+    };
+    let rows = domain_rows(&payload, visits.as_ref())?;
+    match output_format(args.json, args.xml, args.yaml)? {
+        OutputFormat::Text => print_domain_table(&rows),
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&rows)?),
+        OutputFormat::Yaml => print!("{}", domains_yaml(&rows)),
+        OutputFormat::Xml => print!("{}", domains_xml(&rows)),
     }
     Ok(())
 }
@@ -855,19 +910,19 @@ fn derive_tail(target_url: &str) -> String {
         .unwrap_or_else(|| "link".to_string())
 }
 
-fn output_format(args: &ListArgs) -> Result<OutputFormat> {
-    let requested = [args.json, args.xml, args.yaml]
+fn output_format(json: bool, xml: bool, yaml: bool) -> Result<OutputFormat> {
+    let requested = [json, xml, yaml]
         .into_iter()
         .filter(|enabled| *enabled)
         .count();
     if requested > 1 {
         bail!("choose only one of --json, --xml, or --yaml");
     }
-    if args.json {
+    if json {
         Ok(OutputFormat::Json)
-    } else if args.xml {
+    } else if xml {
         Ok(OutputFormat::Xml)
-    } else if args.yaml {
+    } else if yaml {
         Ok(OutputFormat::Yaml)
     } else {
         Ok(OutputFormat::Text)
@@ -903,12 +958,71 @@ fn shortcut_rows(payload: &Value, include_stats: bool) -> Result<Vec<ShortcutRow
         .collect()
 }
 
+fn domain_rows(
+    payload: &Value,
+    visits_by_domain: Option<&BTreeMap<String, u64>>,
+) -> Result<Vec<DomainRow>> {
+    let domains = payload
+        .get("domains")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("suffix.org did not return a domain list"))?;
+    domains
+        .iter()
+        .map(|domain| {
+            let id = string_field(domain, "id")?;
+            Ok(DomainRow {
+                visits: visits_by_domain.map(|visits| visits.get(&id).copied().unwrap_or(0)),
+                id,
+                hostname: string_field(domain, "hostname")?,
+                status: optional_string_field(domain, "status")
+                    .unwrap_or_else(|| "unknown".to_string()),
+                owner_name: optional_string_field(domain, "ownerName"),
+                owner_email: optional_string_field(domain, "ownerEmail"),
+                vercel_verified: optional_bool_field(domain, "vercelVerified"),
+                vercel_misconfigured: optional_bool_field(domain, "vercelMisconfigured"),
+                last_checked_at: optional_string_field(domain, "lastCheckedAt"),
+                last_error: optional_string_field(domain, "lastError"),
+            })
+        })
+        .collect()
+}
+
+fn domain_visit_counts(payload: &Value) -> Result<BTreeMap<String, u64>> {
+    let shortcuts = payload
+        .get("shortcuts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("suffix.org did not return a shortcut list"))?;
+    let mut visits = BTreeMap::new();
+    for shortcut in shortcuts {
+        let Some(domain_id) = shortcut.get("domainId").and_then(Value::as_str) else {
+            continue;
+        };
+        let count = shortcut
+            .get("clickCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        *visits.entry(domain_id.to_string()).or_insert(0) += count;
+    }
+    Ok(visits)
+}
+
 fn string_field(value: &Value, key: &str) -> Result<String> {
     value
         .get(key)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("suffix.org returned a shortcut without {key}"))
+        .ok_or_else(|| anyhow!("suffix.org returned a record without {key}"))
+}
+
+fn optional_string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn optional_bool_field(value: &Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(Value::as_bool)
 }
 
 fn format_shortcut(hostname: &str, tail: &str) -> String {
@@ -924,6 +1038,15 @@ fn print_shortcut_table(rows: &[ShortcutRow]) {
         match row.visits {
             Some(visits) => println!("{}\t{}\t{}", row.shortcut, row.target, visits),
             None => println!("{}\t{}", row.shortcut, row.target),
+        }
+    }
+}
+
+fn print_domain_table(rows: &[DomainRow]) {
+    for row in rows {
+        match row.visits {
+            Some(visits) => println!("{}\t{}\t{}", row.hostname, row.status, visits),
+            None => println!("{}\t{}", row.hostname, row.status),
         }
     }
 }
@@ -949,6 +1072,62 @@ fn shortcuts_xml(rows: &[ShortcutRow]) -> String {
     output
 }
 
+fn domains_xml(rows: &[DomainRow]) -> String {
+    let mut output = String::from("<domains>\n");
+    for row in rows {
+        output.push_str("  <domain>\n");
+        output.push_str(&format!("    <id>{}</id>\n", xml_escape(&row.id)));
+        output.push_str(&format!(
+            "    <hostname>{}</hostname>\n",
+            xml_escape(&row.hostname)
+        ));
+        output.push_str(&format!(
+            "    <status>{}</status>\n",
+            xml_escape(&row.status)
+        ));
+        if let Some(owner_name) = &row.owner_name {
+            output.push_str(&format!(
+                "    <owner_name>{}</owner_name>\n",
+                xml_escape(owner_name)
+            ));
+        }
+        if let Some(owner_email) = &row.owner_email {
+            output.push_str(&format!(
+                "    <owner_email>{}</owner_email>\n",
+                xml_escape(owner_email)
+            ));
+        }
+        if let Some(vercel_verified) = row.vercel_verified {
+            output.push_str(&format!(
+                "    <vercel_verified>{vercel_verified}</vercel_verified>\n"
+            ));
+        }
+        if let Some(vercel_misconfigured) = row.vercel_misconfigured {
+            output.push_str(&format!(
+                "    <vercel_misconfigured>{vercel_misconfigured}</vercel_misconfigured>\n"
+            ));
+        }
+        if let Some(last_checked_at) = &row.last_checked_at {
+            output.push_str(&format!(
+                "    <last_checked_at>{}</last_checked_at>\n",
+                xml_escape(last_checked_at)
+            ));
+        }
+        if let Some(last_error) = &row.last_error {
+            output.push_str(&format!(
+                "    <last_error>{}</last_error>\n",
+                xml_escape(last_error)
+            ));
+        }
+        if let Some(visits) = row.visits {
+            output.push_str(&format!("    <visits>{visits}</visits>\n"));
+        }
+        output.push_str("  </domain>\n");
+    }
+    output.push_str("</domains>\n");
+    output
+}
+
 fn shortcuts_yaml(rows: &[ShortcutRow]) -> String {
     let mut output = String::new();
     for row in rows {
@@ -958,6 +1137,51 @@ fn shortcuts_yaml(rows: &[ShortcutRow]) -> String {
         output.push_str("  target: ");
         output.push_str(&yaml_scalar(&row.target));
         output.push('\n');
+        if let Some(visits) = row.visits {
+            output.push_str(&format!("  visits: {visits}\n"));
+        }
+    }
+    output
+}
+
+fn domains_yaml(rows: &[DomainRow]) -> String {
+    let mut output = String::new();
+    for row in rows {
+        output.push_str("- id: ");
+        output.push_str(&yaml_scalar(&row.id));
+        output.push('\n');
+        output.push_str("  hostname: ");
+        output.push_str(&yaml_scalar(&row.hostname));
+        output.push('\n');
+        output.push_str("  status: ");
+        output.push_str(&yaml_scalar(&row.status));
+        output.push('\n');
+        if let Some(owner_name) = &row.owner_name {
+            output.push_str("  owner_name: ");
+            output.push_str(&yaml_scalar(owner_name));
+            output.push('\n');
+        }
+        if let Some(owner_email) = &row.owner_email {
+            output.push_str("  owner_email: ");
+            output.push_str(&yaml_scalar(owner_email));
+            output.push('\n');
+        }
+        if let Some(vercel_verified) = row.vercel_verified {
+            output.push_str(&format!("  vercel_verified: {vercel_verified}\n"));
+        }
+        if let Some(vercel_misconfigured) = row.vercel_misconfigured {
+            output.push_str(&format!("  vercel_misconfigured: {vercel_misconfigured}\n"));
+        }
+        if let Some(last_checked_at) = &row.last_checked_at {
+            output.push_str("  last_checked_at: ");
+            output.push_str(&yaml_scalar(last_checked_at));
+            output.push('\n');
+        }
+        if let Some(last_error) = &row.last_error {
+            output.push_str("  last_error: ");
+            output.push_str(&yaml_scalar(last_error));
+            output.push('\n');
+        }
         if let Some(visits) = row.visits {
             output.push_str(&format!("  visits: {visits}\n"));
         }
@@ -1107,6 +1331,18 @@ mod tests {
             }
             _ => panic!("expected account command"),
         }
+
+        let cli = Cli::try_parse_from(["suffix", "domain", "ls", "--stats", "--json"]).unwrap();
+        match cli.command {
+            Command::Domain(args) => match args.command {
+                DomainCliCommand::Ls(args) => {
+                    assert!(args.stats);
+                    assert!(args.json);
+                }
+                _ => panic!("expected domain list"),
+            },
+            _ => panic!("expected domain command"),
+        }
     }
 
     #[test]
@@ -1156,15 +1392,46 @@ mod tests {
     }
 
     #[test]
+    fn domain_rows_aggregate_shortcut_visits() {
+        let domains = json!({
+            "domains": [
+                {
+                    "id": "domain-1",
+                    "hostname": "go.example.com",
+                    "status": "verified",
+                    "ownerName": "Test User",
+                    "ownerEmail": "test@example.com",
+                    "vercelVerified": true
+                },
+                {
+                    "id": "domain-2",
+                    "hostname": "jump.example.com",
+                    "status": "pending"
+                }
+            ]
+        });
+        let shortcuts = json!({
+            "shortcuts": [
+                { "domainId": "domain-1", "clickCount": 3 },
+                { "domainId": "domain-1", "clickCount": 4 },
+                { "domainId": "domain-2", "clickCount": 0 }
+            ]
+        });
+        let visits = domain_visit_counts(&shortcuts).unwrap();
+        let rows = domain_rows(&domains, Some(&visits)).unwrap();
+        assert_eq!(rows[0].hostname, "go.example.com");
+        assert_eq!(rows[0].status, "verified");
+        assert_eq!(rows[0].owner_name.as_deref(), Some("Test User"));
+        assert_eq!(rows[0].visits, Some(7));
+        assert_eq!(rows[1].visits, Some(0));
+
+        let rows = domain_rows(&domains, None).unwrap();
+        assert_eq!(rows[0].visits, None);
+    }
+
+    #[test]
     fn list_output_format_rejects_multiple_structured_flags() {
-        let args = ListArgs {
-            domains: false,
-            json: true,
-            xml: true,
-            yaml: false,
-            stats: false,
-        };
-        assert!(output_format(&args).is_err());
+        assert!(output_format(true, true, false).is_err());
     }
 
     #[test]
@@ -1190,5 +1457,31 @@ mod tests {
         let yaml = shortcuts_yaml(&rows);
         assert!(yaml.contains("- shortcut: \"go.example.com/a\""));
         assert!(yaml.contains("target: \"https://example.com/\\\"quoted\\\"\""));
+    }
+
+    #[test]
+    fn domain_structured_output_includes_verbose_fields() {
+        let rows = [DomainRow {
+            id: "domain-1".to_string(),
+            hostname: "go.example.com".to_string(),
+            status: "needs<dns>".to_string(),
+            owner_name: Some("Test User".to_string()),
+            owner_email: Some("test@example.com".to_string()),
+            vercel_verified: Some(false),
+            vercel_misconfigured: Some(true),
+            last_checked_at: Some("2026-07-16T00:00:00Z".to_string()),
+            last_error: Some("A & CNAME conflict".to_string()),
+            visits: Some(11),
+        }];
+        let xml = domains_xml(&rows);
+        assert!(xml.contains("<hostname>go.example.com</hostname>"));
+        assert!(xml.contains("<status>needs&lt;dns&gt;</status>"));
+        assert!(xml.contains("<last_error>A &amp; CNAME conflict</last_error>"));
+        assert!(xml.contains("<visits>11</visits>"));
+
+        let yaml = domains_yaml(&rows);
+        assert!(yaml.contains("- id: \"domain-1\""));
+        assert!(yaml.contains("owner_email: \"test@example.com\""));
+        assert!(yaml.contains("vercel_misconfigured: true"));
     }
 }
