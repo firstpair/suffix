@@ -8,12 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{RngExt, distr::Alphanumeric};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use url::Url;
 
 const DEFAULT_APP_URL: &str = "https://suffix.org";
@@ -76,6 +76,18 @@ struct ListArgs {
     /// List domains instead of shortcuts. Prefer `suffix domain ls`.
     #[arg(long, hide = true)]
     domains: bool,
+    /// Emit formatted JSON.
+    #[arg(long)]
+    json: bool,
+    /// Emit formatted XML.
+    #[arg(long)]
+    xml: bool,
+    /// Emit formatted YAML.
+    #[arg(long)]
+    yaml: bool,
+    /// Include visit counts after the target.
+    #[arg(long)]
+    stats: bool,
 }
 
 #[derive(Args)]
@@ -231,6 +243,22 @@ struct AccountConfig {
     api_key: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ShortcutRow {
+    shortcut: String,
+    target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visits: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Text,
+    Json,
+    Xml,
+    Yaml,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -240,7 +268,7 @@ fn main() -> Result<()> {
             if args.domains {
                 api.get("domains")
             } else {
-                api.get("shortcuts")
+                list_shortcuts(&api, args)
             }
         }
         Command::Add(args) => add(args),
@@ -337,7 +365,9 @@ fn login(args: LoginArgs) -> Result<()> {
                 thread::sleep(Duration::from_millis(100));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                bail!("timed out waiting for browser approval; run `suffix login --no-open` if the browser did not open the approval page")
+                bail!(
+                    "timed out waiting for browser approval; run `suffix login --no-open` if the browser did not open the approval page"
+                )
             }
             Err(error) => return Err(error).context("could not accept the login callback"),
         }
@@ -406,6 +436,18 @@ fn add(args: AddArgs) -> Result<()> {
             "title": args.title,
         }),
     )
+}
+
+fn list_shortcuts(api: &Api, args: ListArgs) -> Result<()> {
+    let payload = api.request_json(api.client.get(api.url("shortcuts")?))?;
+    let rows = shortcut_rows(&payload, args.stats)?;
+    match output_format(&args)? {
+        OutputFormat::Text => print_shortcut_table(&rows),
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&rows)?),
+        OutputFormat::Yaml => print!("{}", shortcuts_yaml(&rows)),
+        OutputFormat::Xml => print!("{}", shortcuts_xml(&rows)),
+    }
+    Ok(())
 }
 
 fn remove(args: RemoveArgs) -> Result<()> {
@@ -632,7 +674,10 @@ impl Api {
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("suffix.org did not return a domain list"))?;
         if domains.is_empty() {
-            bail!("no domains found for {}; add one with `suffix add --domain HOST` or pass --domain-id", self.account)
+            bail!(
+                "no domains found for {}; add one with `suffix add --domain HOST` or pass --domain-id",
+                self.account
+            )
         }
         if domains.len() > 1 {
             eprintln!("Using first domain; pass --domain-id to choose another.");
@@ -727,8 +772,8 @@ fn config_path() -> Result<PathBuf> {
 }
 
 fn random_state() -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
+    rand::rng()
+        .sample_iter(Alphanumeric)
         .take(32)
         .map(char::from)
         .collect()
@@ -746,10 +791,10 @@ fn encode(value: &str) -> String {
 }
 
 fn active_account(config: &Config) -> Option<(&str, &AccountConfig)> {
-    if let Some(name) = config.active_account.as_deref() {
-        if let Some(account) = config.accounts.get(name) {
-            return Some((name, account));
-        }
+    if let Some(name) = config.active_account.as_deref()
+        && let Some(account) = config.accounts.get(name)
+    {
+        return Some((name, account));
     }
     config
         .accounts
@@ -759,13 +804,13 @@ fn active_account(config: &Config) -> Option<(&str, &AccountConfig)> {
 }
 
 fn migrate_single_account_config(config: &mut Config) {
-    if config.accounts.is_empty() {
-        if let (Some(api_base), Some(api_key)) = (config.api_base.take(), config.api_key.take()) {
-            config
-                .accounts
-                .insert("default".to_string(), AccountConfig { api_base, api_key });
-            config.active_account = Some("default".to_string());
-        }
+    if config.accounts.is_empty()
+        && let (Some(api_base), Some(api_key)) = (config.api_base.take(), config.api_key.take())
+    {
+        config
+            .accounts
+            .insert("default".to_string(), AccountConfig { api_base, api_key });
+        config.active_account = Some("default".to_string());
     }
 }
 
@@ -808,6 +853,129 @@ fn derive_tail(target_url: &str) -> String {
         })
         .filter(|tail| !tail.is_empty())
         .unwrap_or_else(|| "link".to_string())
+}
+
+fn output_format(args: &ListArgs) -> Result<OutputFormat> {
+    let requested = [args.json, args.xml, args.yaml]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count();
+    if requested > 1 {
+        bail!("choose only one of --json, --xml, or --yaml");
+    }
+    if args.json {
+        Ok(OutputFormat::Json)
+    } else if args.xml {
+        Ok(OutputFormat::Xml)
+    } else if args.yaml {
+        Ok(OutputFormat::Yaml)
+    } else {
+        Ok(OutputFormat::Text)
+    }
+}
+
+fn shortcut_rows(payload: &Value, include_stats: bool) -> Result<Vec<ShortcutRow>> {
+    let shortcuts = payload
+        .get("shortcuts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("suffix.org did not return a shortcut list"))?;
+    shortcuts
+        .iter()
+        .map(|shortcut| {
+            let hostname = string_field(shortcut, "hostname")?;
+            let tail = string_field(shortcut, "tail")?;
+            let target = string_field(shortcut, "targetUrl")?;
+            Ok(ShortcutRow {
+                shortcut: format_shortcut(&hostname, &tail),
+                target,
+                visits: if include_stats {
+                    Some(
+                        shortcut
+                            .get("clickCount")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    )
+                } else {
+                    None
+                },
+            })
+        })
+        .collect()
+}
+
+fn string_field(value: &Value, key: &str) -> Result<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("suffix.org returned a shortcut without {key}"))
+}
+
+fn format_shortcut(hostname: &str, tail: &str) -> String {
+    if tail.is_empty() {
+        hostname.to_string()
+    } else {
+        format!("{hostname}/{tail}")
+    }
+}
+
+fn print_shortcut_table(rows: &[ShortcutRow]) {
+    for row in rows {
+        match row.visits {
+            Some(visits) => println!("{}\t{}\t{}", row.shortcut, row.target, visits),
+            None => println!("{}\t{}", row.shortcut, row.target),
+        }
+    }
+}
+
+fn shortcuts_xml(rows: &[ShortcutRow]) -> String {
+    let mut output = String::from("<shortcuts>\n");
+    for row in rows {
+        output.push_str("  <shortcut>\n");
+        output.push_str(&format!(
+            "    <short>{}</short>\n",
+            xml_escape(&row.shortcut)
+        ));
+        output.push_str(&format!(
+            "    <target>{}</target>\n",
+            xml_escape(&row.target)
+        ));
+        if let Some(visits) = row.visits {
+            output.push_str(&format!("    <visits>{visits}</visits>\n"));
+        }
+        output.push_str("  </shortcut>\n");
+    }
+    output.push_str("</shortcuts>\n");
+    output
+}
+
+fn shortcuts_yaml(rows: &[ShortcutRow]) -> String {
+    let mut output = String::new();
+    for row in rows {
+        output.push_str("- shortcut: ");
+        output.push_str(&yaml_scalar(&row.shortcut));
+        output.push('\n');
+        output.push_str("  target: ");
+        output.push_str(&yaml_scalar(&row.target));
+        output.push('\n');
+        if let Some(visits) = row.visits {
+            output.push_str(&format!("  visits: {visits}\n"));
+        }
+    }
+    output
+}
+
+fn yaml_scalar(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
@@ -966,5 +1134,61 @@ mod tests {
     fn tail_derives_from_url_path() {
         assert_eq!(derive_tail("https://example.com/path/launch"), "launch");
         assert_eq!(derive_tail("https://example.com/"), "link");
+    }
+
+    #[test]
+    fn shortcut_rows_normalize_api_payload() {
+        let payload = json!({
+            "shortcuts": [{
+                "hostname": "go.example.com",
+                "tail": "launch",
+                "targetUrl": "https://example.com/launch",
+                "clickCount": 42
+            }]
+        });
+        let rows = shortcut_rows(&payload, true).unwrap();
+        assert_eq!(rows[0].shortcut, "go.example.com/launch");
+        assert_eq!(rows[0].target, "https://example.com/launch");
+        assert_eq!(rows[0].visits, Some(42));
+
+        let rows = shortcut_rows(&payload, false).unwrap();
+        assert_eq!(rows[0].visits, None);
+    }
+
+    #[test]
+    fn list_output_format_rejects_multiple_structured_flags() {
+        let args = ListArgs {
+            domains: false,
+            json: true,
+            xml: true,
+            yaml: false,
+            stats: false,
+        };
+        assert!(output_format(&args).is_err());
+    }
+
+    #[test]
+    fn xml_output_escapes_shortcuts() {
+        let rows = [ShortcutRow {
+            shortcut: "go.example.com/a&b".to_string(),
+            target: "https://example.com/?a=1&b=2".to_string(),
+            visits: Some(3),
+        }];
+        let xml = shortcuts_xml(&rows);
+        assert!(xml.contains("<short>go.example.com/a&amp;b</short>"));
+        assert!(xml.contains("<target>https://example.com/?a=1&amp;b=2</target>"));
+        assert!(xml.contains("<visits>3</visits>"));
+    }
+
+    #[test]
+    fn yaml_output_quotes_shortcuts() {
+        let rows = [ShortcutRow {
+            shortcut: "go.example.com/a".to_string(),
+            target: "https://example.com/\"quoted\"".to_string(),
+            visits: None,
+        }];
+        let yaml = shortcuts_yaml(&rows);
+        assert!(yaml.contains("- shortcut: \"go.example.com/a\""));
+        assert!(yaml.contains("target: \"https://example.com/\\\"quoted\\\"\""));
     }
 }

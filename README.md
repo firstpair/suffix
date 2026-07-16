@@ -40,6 +40,10 @@ export SUFFIX_API_KEY=curtail_sk_...
 
 ```sh
 suffix ls
+suffix ls --stats
+suffix ls --json
+suffix ls --yaml
+suffix ls --xml
 suffix add https://example.com launch --domain-id <uuid>
 suffix rm <shortcut-id> --version <version>
 suffix stats <shortcut-id> --days 30
@@ -54,14 +58,17 @@ suffix account add work --key curtail_sk_...
 suffix account rm work
 ```
 
-All commands print formatted JSON from the API.
+`suffix ls` prints tab-separated `shortcut<TAB>target`; `--stats` adds visits as the third column. `--json`, `--yaml`, and `--xml` emit the same normalized shortcut records in structured form.
 
 ## Development
 
 ```sh
 cargo fmt
 cargo test
+cargo clippy -- -D warnings
 cargo build
 ```
+
+The repo pins Rust through `rust-toolchain.toml` to the current stable channel with `rustfmt` and `clippy`.
 
 The login flow depends on dashboard support in Curtail: the dashboard only returns API keys to loopback HTTP callbacks with a matching random state.
