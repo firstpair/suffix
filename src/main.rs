@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::TcpListener,
-    path::PathBuf,
+    path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
@@ -18,6 +18,7 @@ use url::Url;
 
 const DEFAULT_APP_URL: &str = "https://suffix.org";
 const DEFAULT_API_BASE: &str = "https://suffix.org/api/v1";
+const MANPAGE: &str = include_str!("../man/suffix.1");
 
 #[derive(Parser)]
 #[command(name = "suffix", version, about = "CLI client for suffix.org")]
@@ -52,12 +53,33 @@ enum Command {
     Stats(StatsArgs),
     /// Show the active CLI configuration without printing secrets.
     Config,
+    /// Install the Suffix manual page.
+    Man(ManArgs),
     /// Manage shortcuts. Prefer `suffix ls`, `suffix add`, and `suffix rm`.
     #[command(hide = true)]
     Shortcuts(ShortcutsArgs),
     /// Manage domains. Prefer `suffix ls --domains`, `suffix add --domain`, and `suffix rm --domain`.
     #[command(hide = true)]
     Domains(DomainsArgs),
+}
+
+#[derive(Args)]
+struct ManArgs {
+    #[command(subcommand)]
+    command: ManCommand,
+}
+
+#[derive(Subcommand)]
+enum ManCommand {
+    /// Install suffix(1) into a standard writable man1 directory.
+    Install(ManInstallArgs),
+}
+
+#[derive(Args)]
+struct ManInstallArgs {
+    /// Specific man1 directory to install into.
+    #[arg(long, value_name = "DIR")]
+    dir: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -392,6 +414,9 @@ fn main() -> Result<()> {
         }
         Some(Command::Account(args)) => account(args),
         Some(Command::Config) => print_config(),
+        Some(Command::Man(args)) => match args.command {
+            ManCommand::Install(args) => install_manpage(args.dir),
+        },
         Some(Command::Shortcuts(args)) => {
             let api = Api::from_config()?;
             match args.command {
@@ -621,15 +646,16 @@ fn shortcut_add_fields(args: &AddArgs) -> Result<ShortcutAddFields> {
     if args.target_url.is_some() {
         bail!("usage: suffix add -d HOST TAIL URL or suffix add HOST/TAIL URL");
     }
-    if let Some(target_url) = args.tail.as_deref() {
-        if !looks_like_url(&args.value) && looks_like_url(target_url) {
-            let (hostname, tail) = split_shortcut_locator(&args.value)?;
-            return Ok(ShortcutAddFields {
-                domain: ShortcutAddDomain::Hostname(hostname),
-                tail,
-                target_url: target_url.to_string(),
-            });
-        }
+    if let Some(target_url) = args.tail.as_deref()
+        && !looks_like_url(&args.value)
+        && looks_like_url(target_url)
+    {
+        let (hostname, tail) = split_shortcut_locator(&args.value)?;
+        return Ok(ShortcutAddFields {
+            domain: ShortcutAddDomain::Hostname(hostname),
+            tail,
+            target_url: target_url.to_string(),
+        });
     }
     Ok(ShortcutAddFields {
         domain: args
@@ -1620,9 +1646,94 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn install_manpage(requested_directory: Option<PathBuf>) -> Result<()> {
+    let directories = requested_directory
+        .map(|directory| vec![directory])
+        .unwrap_or_else(default_manpage_directories);
+    let mut failures = Vec::new();
+
+    for directory in directories {
+        match install_manpage_in(&directory) {
+            Ok(destination) => {
+                println!("Installed Suffix manual at {}", destination.display());
+                return Ok(());
+            }
+            Err(error) => failures.push(format!("{}: {error:#}", directory.display())),
+        }
+    }
+
+    bail!(
+        "could not install the Suffix manual. Try `suffix man install --dir ~/.local/share/man/man1`, or run with the required system privileges.\n{}",
+        failures.join("\n")
+    )
+}
+
+fn install_manpage_in(directory: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(directory)
+        .with_context(|| format!("could not create {}", directory.display()))?;
+    let destination = directory.join("suffix.1");
+    fs::write(&destination, MANPAGE)
+        .with_context(|| format!("could not write {}", destination.display()))?;
+    Ok(destination)
+}
+
+fn default_manpage_directories() -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    manpage_directories_for(std::env::consts::OS, &home)
+}
+
+fn manpage_directories_for(platform: &str, home: &Path) -> Vec<PathBuf> {
+    let user_directory = home.join(".local/share/man/man1");
+    if platform == "macos" {
+        vec![
+            PathBuf::from("/opt/homebrew/share/man/man1"),
+            PathBuf::from("/usr/local/share/man/man1"),
+            user_directory,
+        ]
+    } else {
+        vec![
+            PathBuf::from("/usr/local/share/man/man1"),
+            user_directory,
+            PathBuf::from("/usr/share/man/man1"),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn man_install_uses_standard_platform_directories_and_embeds_the_manual() {
+        assert_eq!(
+            manpage_directories_for("macos", Path::new("/Users/example")),
+            vec![
+                PathBuf::from("/opt/homebrew/share/man/man1"),
+                PathBuf::from("/usr/local/share/man/man1"),
+                PathBuf::from("/Users/example/.local/share/man/man1"),
+            ]
+        );
+        assert_eq!(
+            manpage_directories_for("linux", Path::new("/home/example")),
+            vec![
+                PathBuf::from("/usr/local/share/man/man1"),
+                PathBuf::from("/home/example/.local/share/man/man1"),
+                PathBuf::from("/usr/share/man/man1"),
+            ]
+        );
+        assert!(MANPAGE.contains(".TH SUFFIX 1"));
+    }
+
+    #[test]
+    fn man_install_writes_to_an_explicit_directory() {
+        let directory =
+            std::env::temp_dir().join(format!("suffix-man-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+
+        let destination = install_manpage_in(&directory).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), MANPAGE);
+        fs::remove_dir_all(&directory).unwrap();
+    }
 
     #[test]
     fn login_url_carries_loopback_callback_and_state() {

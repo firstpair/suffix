@@ -70,6 +70,7 @@ suffix account work
 suffix account add work --key curtail_sk_...
 suffix logout person@example.com
 suffix account rm work
+suffix man install
 ```
 
 Bare `suffix` prints the same shortcut view as `suffix ls -l`, then the same cached account view as `suffix account ls -l`.
@@ -83,6 +84,24 @@ Bare `suffix` prints the same shortcut view as `suffix ls -l`, then the same cac
 `suffix mv DOMAIN FROM_EMAIL_OR_NAME TO_EMAIL_OR_NAME` remains available for local power users with both accounts already logged in. It prompts for `move DOMAIN` before sending the request; use `--yes` only for scripts. The source account signs the request, and the target account's saved key proves the receiving account.
 
 `suffix account ls` is offline and prints saved account identities with `logged in` or `logged out`; `-l`/`--long` adds cached base URL, domain/link/visit counts, and any cached status fields. `suffix logout EMAIL_OR_NAME` removes the saved API key but keeps the cached account row.
+
+## Manual page
+
+The crate embeds its maintained `suffix(1)` manual page. Install it after
+`cargo install suffix-cli` with:
+
+```sh
+suffix man install
+man suffix
+```
+
+Without `--dir`, Suffix tries standard writable `man1` locations: Homebrew,
+`/usr/local`, then user-local on macOS; `/usr/local`, user-local, then
+`/usr/share` on Linux. Choose an exact destination when necessary:
+
+```sh
+suffix man install --dir /usr/local/share/man/man1
+```
 
 ## Development
 

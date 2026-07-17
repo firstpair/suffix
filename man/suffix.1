@@ -1,0 +1,78 @@
+.TH SUFFIX 1 2026-07-17 "Suffix 0.1.1" "User Commands"
+.SH NAME
+suffix \- manage durable short links on domains you own
+.SH SYNOPSIS
+.B suffix
+.RI [ command ]
+.RI [ options ]
+.br
+.B suffix man install
+.RI [ --dir " man1-directory" ]
+.SH DESCRIPTION
+.B suffix
+is the command-line client for the Suffix canonical API at
+.B https://suffix.org/api/v1.
+It manages only the domains and shortcuts belonging to the active saved account.
+Use
+.B suffix login
+to approve and store a bearer key through the browser.
+.SH COMMANDS
+.TP
+.B login [email]
+Open a browser login flow and save a one-time API key. The optional email is a
+sign-in hint.
+.TP
+.B ls [--json|--yaml|--xml] [-l|--stats]
+List shortcuts. The normal output is tab-separated shortcut and destination
+columns.
+.TP
+.B add [options] \fIvalue\fR [\fItail\fR] [\fItarget-url\fR]
+Create a shortcut. Use a hostname-and-tail value such as
+.B pair.rs/typesec
+or use
+.B -d
+with an explicit domain hostname.
+.TP
+.B rm \fIshortcut-id\fR [--version \fIversion\fR]
+Delete a shortcut. If no version is supplied, Suffix reads it before deleting.
+.TP
+.B domain ls|add|rm
+List, add, or remove owned domains.
+.TP
+.B transfer \fIdomain\fR [--to \fIemail\fR]
+Create a short-lived code for moving a domain to another account.
+.TP
+.B accept \fIcode\fR
+Accept a domain-transfer code into the active account.
+.TP
+.B account [ls|add|rm|name]
+List, add, remove, or select saved account profiles.
+.TP
+.B man install [--dir \fIman1-directory\fR]
+Install this manual as
+.I suffix.1
+in the first writable standard section-1 manual directory. On macOS, Suffix
+checks Homebrew, local, and user-local directories. On Linux, it checks local,
+user-local, and system directories. Use
+.B --dir
+to select an exact directory. A system-owned destination may require elevated
+privileges.
+.SH FILES
+.TP
+.B suffix/config.toml
+The platform configuration directory holds saved API bases, account metadata,
+and API keys.
+.SH ENVIRONMENT
+.TP
+.B SUFFIX_API_BASE
+Overrides the saved API base URL.
+.TP
+.B SUFFIX_API_KEY
+Overrides the saved bearer API key.
+.SH EXIT STATUS
+.B suffix
+exits zero on success and nonzero for invalid arguments or authentication,
+API, and manual-page installation failures.
+.SH SEE ALSO
+The Suffix dashboard and API documentation are available at
+.B https://suffix.org.
