@@ -59,6 +59,8 @@ suffix domain ls --yaml
 suffix domain ls --xml
 suffix domain add go.example.com
 suffix domain rm <domain-id>
+suffix transfer go.example.com --to person@example.com
+suffix accept SUF-X7K9-Q2M
 suffix mv go.example.com owner@example.com target@example.com
 
 suffix account
@@ -76,7 +78,9 @@ Bare `suffix` prints the same shortcut view as `suffix ls -l`, then the same cac
 
 `suffix domain ls` prints tab-separated `domain<TAB>status`; `-l`/`--stats` adds aggregate shortcut visits as the third column. `--json`, `--yaml`, and `--xml` emit verbose normalized domain records.
 
-`suffix mv DOMAIN FROM_EMAIL_OR_NAME TO_EMAIL_OR_NAME` transfers a domain between two locally logged-in accounts. It prompts for `move DOMAIN` before sending the request; use `--yes` only for scripts. The source account signs the request, and the target account's saved key proves the receiving account.
+`suffix transfer DOMAIN --to EMAIL` creates a short-lived code for moving a domain out of the active account. The receiving account signs in separately and runs `suffix accept CODE`, or pastes the code into the Suffix dashboard. `--to` is optional but recommended because it pins acceptance to that email address.
+
+`suffix mv DOMAIN FROM_EMAIL_OR_NAME TO_EMAIL_OR_NAME` remains available for local power users with both accounts already logged in. It prompts for `move DOMAIN` before sending the request; use `--yes` only for scripts. The source account signs the request, and the target account's saved key proves the receiving account.
 
 `suffix account ls` is offline and prints saved account identities with `logged in` or `logged out`; `-l`/`--long` adds cached base URL, domain/link/visit counts, and any cached status fields. `suffix logout EMAIL_OR_NAME` removes the saved API key but keeps the cached account row.
 

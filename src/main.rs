@@ -40,6 +40,10 @@ enum Command {
     Rm(RemoveArgs),
     /// Move a domain from one logged-in account to another.
     Mv(MoveArgs),
+    /// Create a short-lived transfer code for a domain.
+    Transfer(TransferArgs),
+    /// Accept a domain transfer code into the active account.
+    Accept(AcceptArgs),
     /// Manage domains.
     Domain(DomainArgs),
     /// List or switch stored accounts.
@@ -157,6 +161,24 @@ struct MoveArgs {
     /// Skip the interactive confirmation prompt.
     #[arg(short = 'y', long)]
     yes: bool,
+}
+
+#[derive(Args)]
+struct TransferArgs {
+    /// Domain hostname or ID to transfer.
+    domain: String,
+    /// Optional receiving account email. If set, only that account can accept.
+    #[arg(long, short = 't')]
+    to: Option<String>,
+    /// Minutes before the transfer code expires.
+    #[arg(long, default_value_t = 15)]
+    minutes: u16,
+}
+
+#[derive(Args)]
+struct AcceptArgs {
+    /// Transfer code from `suffix transfer`.
+    code: String,
 }
 
 #[derive(Args)]
@@ -356,6 +378,8 @@ fn main() -> Result<()> {
         Some(Command::Add(args)) => add(args),
         Some(Command::Rm(args)) => remove(args),
         Some(Command::Mv(args)) => move_domain(args),
+        Some(Command::Transfer(args)) => transfer_code(args),
+        Some(Command::Accept(args)) => accept_transfer(args),
         Some(Command::Domain(args)) => {
             let api = Api::from_config()?;
             match args.command {
@@ -719,6 +743,44 @@ fn move_domain(args: MoveArgs) -> Result<()> {
     )
 }
 
+fn transfer_code(args: TransferArgs) -> Result<()> {
+    let api = Api::from_config()?;
+    let payload = api.request_json(api.client.post(api.url("transfers")?).json(&json!({
+        "domain": args.domain,
+        "targetEmail": args.to,
+        "lifetimeMinutes": args.minutes,
+    })))?;
+    let code = payload
+        .get("code")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("suffix.org did not return a transfer code"))?;
+    let expires_at = payload
+        .get("transfer")
+        .and_then(|transfer| transfer.get("expiresAt"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    println!("Transfer code: {code}");
+    if !expires_at.is_empty() {
+        println!("Expires: {expires_at}");
+    }
+    println!("Give this code to the receiving account, then run: suffix accept {code}");
+    Ok(())
+}
+
+fn accept_transfer(args: AcceptArgs) -> Result<()> {
+    let api = Api::from_config()?;
+    let payload = api.request_json(api.client.patch(api.url("transfers")?).json(&json!({
+        "code": args.code,
+    })))?;
+    let domain = payload
+        .get("domain")
+        .and_then(|domain| domain.get("hostname"))
+        .and_then(Value::as_str)
+        .unwrap_or("domain");
+    println!("Accepted transfer for {domain}.");
+    Ok(())
+}
+
 fn confirm_domain_move(domain: &str, from: &str, to: &str) -> Result<()> {
     eprintln!("Move {domain} from {from} to {to}?");
     eprint!("Type `move {domain}` to confirm: ");
@@ -1044,6 +1106,7 @@ fn route_resource(resource: &str) -> Result<&'static str> {
     match name {
         "shortcuts" => Ok("shortcuts"),
         "domains" => Ok("domains"),
+        "transfers" => Ok("transfers"),
         "stats" => Ok("stats"),
         _ => bail!("unsupported API resource {name}"),
     }
@@ -1809,6 +1872,31 @@ mod tests {
                 assert!(args.yes);
             }
             _ => panic!("expected move command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "transfer",
+            "pair.rs",
+            "--to",
+            "target@example.com",
+            "--minutes",
+            "30",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Transfer(args)) => {
+                assert_eq!(args.domain, "pair.rs");
+                assert_eq!(args.to.as_deref(), Some("target@example.com"));
+                assert_eq!(args.minutes, 30);
+            }
+            _ => panic!("expected transfer command"),
+        }
+
+        let cli = Cli::try_parse_from(["suffix", "accept", "SUF-X7K9-Q2M"]).unwrap();
+        match cli.command {
+            Some(Command::Accept(args)) => assert_eq!(args.code, "SUF-X7K9-Q2M"),
+            _ => panic!("expected accept command"),
         }
 
         let cli = Cli::try_parse_from([
