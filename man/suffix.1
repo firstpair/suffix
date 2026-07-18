@@ -26,9 +26,10 @@ to open the browser and replace that key intentionally.
 Old unnamed default profiles are discarded; sign in again with an email or an
 explicit profile name.
 .TP
-.B ls [--json|--yaml|--xml] [-l|--stats]
+.B ls [options] [account]
 List shortcuts. The normal output is tab-separated shortcut and destination
-columns.
+columns. A trailing saved account email selects that account
+without changing the active profile.
 .TP
 .B add [options] \fIvalue\fR [\fItail\fR] [\fItarget-url\fR]
 Create a shortcut. Use a hostname-and-tail value such as
@@ -41,7 +42,12 @@ with an explicit domain hostname.
 Delete a shortcut. If no version is supplied, Suffix reads it before deleting.
 .TP
 .B domain ls|add|rm
-List, add, or remove owned domains.
+List, add, or remove owned domains. A trailing saved account email selects that
+account. The same trailing account convention applies to
+.B add,
+.B rm,
+and
+.B stats.
 .TP
 .B transfer \fIdomain\fR [--to \fIemail\fR]
 Create a short-lived code for moving a domain to another account.

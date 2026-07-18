@@ -42,7 +42,7 @@ export SUFFIX_API_KEY=curtail_sk_...
 
 ```sh
 suffix
-suffix ls
+suffix ls [account@example.com]
 suffix ls -l
 suffix ls --json
 suffix ls --yaml
@@ -79,9 +79,9 @@ suffix man install
 
 Bare `suffix` prints the same shortcut view as `suffix ls -l`, then the same cached account view as `suffix account ls -l`.
 
-`suffix ls` prints tab-separated `shortcut<TAB>target`; `-l`/`--stats` adds visits as the third column. `--json`, `--yaml`, and `--xml` emit the same normalized shortcut records in structured form.
+`suffix ls [EMAIL]` prints tab-separated `shortcut<TAB>target`; `-l`/`--stats` adds visits as the third column. When a saved account email is the trailing argument, Suffix uses that account's key without changing the active profile. `--json`, `--yaml`, and `--xml` emit the same normalized shortcut records in structured form.
 
-`suffix domain ls` prints tab-separated `domain<TAB>status`; `-l`/`--stats` adds aggregate shortcut visits as the third column. `--json`, `--yaml`, and `--xml` emit verbose normalized domain records.
+`suffix domain ls [EMAIL]` prints tab-separated `domain<TAB>status`; `-l`/`--stats` adds aggregate shortcut visits as the third column. The same optional trailing account email applies to `suffix add`, `suffix rm`, `suffix stats`, `suffix domain add`, and `suffix domain rm`. `--json`, `--yaml`, and `--xml` emit verbose normalized domain records.
 
 `suffix transfer DOMAIN --to EMAIL` creates a short-lived code for moving a domain out of the active account. The receiving account signs in separately and runs `suffix accept CODE`, or pastes the code into the Suffix dashboard. `--to` is optional but recommended because it pins acceptance to that email address.
 

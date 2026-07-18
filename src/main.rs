@@ -111,6 +111,8 @@ struct LoginArgs {
 
 #[derive(Args)]
 struct ListArgs {
+    /// Saved account email to query instead of the active account.
+    account: Option<String>,
     /// List domains instead of shortcuts. Prefer `suffix domain ls`.
     #[arg(long, hide = true)]
     domains: bool,
@@ -130,6 +132,8 @@ struct ListArgs {
 
 #[derive(Args)]
 struct DomainListArgs {
+    /// Saved account email to query instead of the active account.
+    account: Option<String>,
     /// Emit formatted JSON.
     #[arg(long)]
     json: bool,
@@ -155,6 +159,8 @@ struct AddArgs {
     tail: Option<String>,
     /// Target URL when using `-d HOST TAIL URL`.
     target_url: Option<String>,
+    /// Saved account email to modify instead of the active account.
+    account: Option<String>,
     /// Domain ID for a new shortcut. Defaults to the first owned domain.
     #[arg(long)]
     domain_id: Option<String>,
@@ -170,6 +176,8 @@ struct RemoveArgs {
     domain: bool,
     /// Shortcut or domain ID.
     id: String,
+    /// Saved account email to modify instead of the active account.
+    account: Option<String>,
     /// Shortcut version. If omitted, suffix looks it up first.
     #[arg(long)]
     version: Option<u64>,
@@ -223,9 +231,17 @@ enum DomainCliCommand {
     /// List domains.
     Ls(DomainListArgs),
     /// Add a domain.
-    Add { hostname: String },
+    Add {
+        hostname: String,
+        /// Saved account email to modify instead of the active account.
+        account: Option<String>,
+    },
     /// Remove an empty domain.
-    Rm { id: String },
+    Rm {
+        id: String,
+        /// Saved account email to modify instead of the active account.
+        account: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -319,6 +335,8 @@ enum DomainCommand {
 struct StatsArgs {
     /// Shortcut ID to inspect.
     shortcut_id: String,
+    /// Saved account email to query instead of the active account.
+    account: Option<String>,
     /// UTC day window from 1 through 90.
     #[arg(long, default_value_t = 30)]
     days: u16,
@@ -399,7 +417,8 @@ fn main() -> Result<()> {
         Some(Command::Login(args)) => login(args),
         Some(Command::Logout { account }) => logout(&account),
         Some(Command::Ls(args)) => {
-            let api = Api::from_config()?;
+            let config = load_config()?;
+            let api = api_for_account(&config, args.account.as_deref())?;
             if args.domains {
                 api.get("domains")
             } else {
@@ -411,16 +430,23 @@ fn main() -> Result<()> {
         Some(Command::Mv(args)) => move_domain(args),
         Some(Command::Transfer(args)) => transfer_code(args),
         Some(Command::Accept(args)) => accept_transfer(args),
-        Some(Command::Domain(args)) => {
-            let api = Api::from_config()?;
-            match args.command {
-                DomainCliCommand::Ls(args) => list_domains(&api, args),
-                DomainCliCommand::Add { hostname } => {
-                    api.post("domains", json!({ "hostname": hostname }))
-                }
-                DomainCliCommand::Rm { id } => api.delete(&format!("domains?id={}", encode(&id))),
+        Some(Command::Domain(args)) => match args.command {
+            DomainCliCommand::Ls(args) => {
+                let config = load_config()?;
+                let api = api_for_account(&config, args.account.as_deref())?;
+                list_domains(&api, args)
             }
-        }
+            DomainCliCommand::Add { hostname, account } => {
+                let config = load_config()?;
+                let api = api_for_account(&config, account.as_deref())?;
+                api.post("domains", json!({ "hostname": hostname }))
+            }
+            DomainCliCommand::Rm { id, account } => {
+                let config = load_config()?;
+                let api = api_for_account(&config, account.as_deref())?;
+                api.delete(&format!("domains?id={}", encode(&id)))
+            }
+        },
         Some(Command::Account(args)) => account(args),
         Some(Command::Config) => print_config(),
         Some(Command::Man(args)) => match args.command {
@@ -462,7 +488,8 @@ fn main() -> Result<()> {
             }
         }
         Some(Command::Stats(args)) => {
-            let api = Api::from_config()?;
+            let config = load_config()?;
+            let api = api_for_account(&config, args.account.as_deref())?;
             api.get(&format!(
                 "stats?shortcutId={}&days={}",
                 encode(&args.shortcut_id),
@@ -477,6 +504,7 @@ fn overview() -> Result<()> {
     list_shortcuts(
         &api,
         ListArgs {
+            account: None,
             domains: false,
             json: false,
             xml: false,
@@ -601,7 +629,8 @@ fn login(args: LoginArgs) -> Result<()> {
 }
 
 fn add(args: AddArgs) -> Result<()> {
-    let api = Api::from_config()?;
+    let config = load_config()?;
+    let api = api_for_account(&config, add_account(&args))?;
     let shortcut = shortcut_add_fields(&args)?;
     let mut payload = json!({
         "tail": shortcut.tail,
@@ -654,6 +683,7 @@ fn shortcut_add_fields(args: &AddArgs) -> Result<ShortcutAddFields> {
         let target_url = args
             .target_url
             .as_deref()
+            .filter(|value| !looks_like_email(value))
             .or(args.tail.as_deref())
             .ok_or_else(|| anyhow!("usage: suffix add -d HOST TAIL URL"))?;
         return Ok(ShortcutAddFields {
@@ -662,7 +692,11 @@ fn shortcut_add_fields(args: &AddArgs) -> Result<ShortcutAddFields> {
             target_url: target_url.to_string(),
         });
     }
-    if args.target_url.is_some() {
+    if args
+        .target_url
+        .as_deref()
+        .is_some_and(|value| !looks_like_email(value))
+    {
         bail!("usage: suffix add -d HOST TAIL URL or suffix add HOST/TAIL URL");
     }
     if let Some(target_url) = args.tail.as_deref()
@@ -690,6 +724,14 @@ fn shortcut_add_fields(args: &AddArgs) -> Result<ShortcutAddFields> {
     })
 }
 
+fn add_account(args: &AddArgs) -> Option<&str> {
+    args.account.as_deref().or_else(|| {
+        args.target_url
+            .as_deref()
+            .filter(|value| looks_like_email(value))
+    })
+}
+
 fn split_shortcut_locator(value: &str) -> Result<(String, String)> {
     let (hostname, tail) = value
         .split_once('/')
@@ -704,6 +746,10 @@ fn looks_like_url(value: &str) -> bool {
     Url::parse(value)
         .map(|url| matches!(url.scheme(), "http" | "https"))
         .unwrap_or(false)
+}
+
+fn looks_like_email(value: &str) -> bool {
+    normalize_login_email(value).is_ok()
 }
 
 fn list_shortcuts(api: &Api, args: ListArgs) -> Result<()> {
@@ -737,7 +783,8 @@ fn list_domains(api: &Api, args: DomainListArgs) -> Result<()> {
 }
 
 fn remove(args: RemoveArgs) -> Result<()> {
-    let api = Api::from_config()?;
+    let config = load_config()?;
+    let api = api_for_account(&config, args.account.as_deref())?;
     if args.domain {
         return api.delete(&format!("domains?id={}", encode(&args.id)));
     }
@@ -1312,6 +1359,18 @@ fn active_account(config: &Config) -> Option<(&str, &AccountConfig)> {
         .iter()
         .next()
         .map(|(name, account)| (name.as_str(), account))
+}
+
+fn api_for_account(config: &Config, selector: Option<&str>) -> Result<Api> {
+    let Some(selector) = selector else {
+        return Api::from_config();
+    };
+    let name = account_selector(config, selector)?;
+    let account = config
+        .accounts
+        .get(&name)
+        .ok_or_else(|| anyhow!("no stored account matching {selector}"))?;
+    Api::from_account(&name, account)
 }
 
 fn first_logged_in_account(config: &Config) -> Option<String> {
@@ -2079,6 +2138,29 @@ mod tests {
         let cli = Cli::try_parse_from([
             "suffix",
             "add",
+            "pair.rs/typesec",
+            "https://github.com/querygraph/typesec",
+            "work@example.com",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Add(args)) => {
+                assert_eq!(add_account(&args), Some("work@example.com"));
+                assert_eq!(
+                    shortcut_add_fields(&args).unwrap(),
+                    ShortcutAddFields {
+                        domain: ShortcutAddDomain::Hostname("pair.rs".to_string()),
+                        tail: "typesec".to_string(),
+                        target_url: "https://github.com/querygraph/typesec".to_string(),
+                    }
+                );
+            }
+            _ => panic!("expected add command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "add",
             "-d",
             "pair.rs",
             "typesec",
@@ -2099,11 +2181,31 @@ mod tests {
             _ => panic!("expected add command"),
         }
 
-        let cli = Cli::try_parse_from(["suffix", "rm", "shortcut-1", "--version", "7"]).unwrap();
+        let cli = Cli::try_parse_from(["suffix", "domain", "ls", "work@example.com"]).unwrap();
+        match cli.command {
+            Some(Command::Domain(args)) => match args.command {
+                DomainCliCommand::Ls(args) => {
+                    assert_eq!(args.account.as_deref(), Some("work@example.com"));
+                }
+                _ => panic!("expected domain list"),
+            },
+            _ => panic!("expected domain command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "rm",
+            "shortcut-1",
+            "work@example.com",
+            "--version",
+            "7",
+        ])
+        .unwrap();
         match cli.command {
             Some(Command::Rm(args)) => {
                 assert!(!args.domain);
                 assert_eq!(args.id, "shortcut-1");
+                assert_eq!(args.account.as_deref(), Some("work@example.com"));
                 assert_eq!(args.version, Some(7));
             }
             _ => panic!("expected rm command"),
@@ -2115,16 +2217,29 @@ mod tests {
         let cli = Cli::try_parse_from(["suffix"]).unwrap();
         assert!(cli.command.is_none());
 
-        let cli = Cli::try_parse_from(["suffix", "ls", "-l"]).unwrap();
+        let cli = Cli::try_parse_from(["suffix", "ls", "-l", "work@example.com"]).unwrap();
         match cli.command {
-            Some(Command::Ls(args)) => assert!(args.stats),
+            Some(Command::Ls(args)) => {
+                assert!(args.stats);
+                assert_eq!(args.account.as_deref(), Some("work@example.com"));
+            }
             _ => panic!("expected shortcut list"),
         }
 
-        let cli = Cli::try_parse_from(["suffix", "domain", "add", "go.example.com"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "domain",
+            "add",
+            "go.example.com",
+            "work@example.com",
+        ])
+        .unwrap();
         match cli.command {
             Some(Command::Domain(args)) => match args.command {
-                DomainCliCommand::Add { hostname } => assert_eq!(hostname, "go.example.com"),
+                DomainCliCommand::Add { hostname, account } => {
+                    assert_eq!(hostname, "go.example.com");
+                    assert_eq!(account.as_deref(), Some("work@example.com"));
+                }
                 _ => panic!("expected domain add"),
             },
             _ => panic!("expected domain command"),
