@@ -1199,24 +1199,7 @@ impl Api {
     }
 
     fn request_json(&self, request: reqwest::blocking::RequestBuilder) -> Result<Value> {
-        let response = request
-            .bearer_auth(&self.key)
-            .send()
-            .context("request failed")?;
-        let status = response.status();
-        let payload: Value = response.json().unwrap_or_else(|_| json!({}));
-        if !status.is_success() {
-            let code = payload
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("request_failed");
-            let message = payload
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("suffix.org rejected the request");
-            bail!("{code}: {message}");
-        }
-        Ok(payload)
+        verdun_cli::authenticated_json(request, &self.key)
     }
 
     fn default_domain_id(&self) -> Result<String> {
@@ -1271,29 +1254,16 @@ fn route_resource(resource: &str) -> Result<&'static str> {
 
 fn load_config() -> Result<Config> {
     let path = config_path()?;
-    if !path.exists() {
-        return Ok(Config::default());
-    }
-    let contents =
-        fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
-    let mut config: Config =
-        toml::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))?;
+    let mut config: Config = verdun_cli::read_toml(&path)?;
     if discard_legacy_profiles(&mut config) {
-        fs::write(&path, toml::to_string(&config)?)
-            .with_context(|| format!("could not update {}", path.display()))?;
+        verdun_cli::write_toml(&path, &config)?;
     }
     Ok(config)
 }
 
 fn save_config(config: &Config) -> Result<()> {
     let path = config_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("could not create {}", parent.display()))?;
-    }
-    fs::write(&path, toml::to_string(config)?)
-        .with_context(|| format!("could not write {}", path.display()))?;
-    Ok(())
+    verdun_cli::write_toml(&path, config)
 }
 
 fn print_config() -> Result<()> {
@@ -1324,9 +1294,7 @@ fn print_config() -> Result<()> {
 }
 
 fn config_path() -> Result<PathBuf> {
-    let dir =
-        dirs::config_dir().ok_or_else(|| anyhow!("could not find the user config directory"))?;
-    Ok(dir.join("suffix").join("config.toml"))
+    verdun_cli::config_path("suffix")
 }
 
 fn random_state() -> String {
