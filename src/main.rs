@@ -29,7 +29,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Open the browser, approve a one-time API key, and save it locally.
+    /// Select a saved account, or approve and save a new API key.
     Login(LoginArgs),
     /// Forget a saved account's API key but keep cached account metadata.
     Logout { account: String },
@@ -39,7 +39,7 @@ enum Command {
     Add(AddArgs),
     /// Remove a shortcut.
     Rm(RemoveArgs),
-    /// Move a domain from one logged-in account to another.
+    /// Move a domain between logged-in accounts.
     Mv(MoveArgs),
     /// Create a short-lived transfer code for a domain.
     Transfer(TransferArgs),
@@ -84,7 +84,7 @@ struct ManInstallArgs {
 
 #[derive(Args)]
 struct LoginArgs {
-    /// Email address to hint in the browser sign-in flow.
+    /// Email address to select or create a saved account profile for.
     login_email: Option<String>,
     /// Suffix dashboard URL to open.
     #[arg(long, default_value = DEFAULT_APP_URL)]
@@ -98,6 +98,9 @@ struct LoginArgs {
     /// API key name shown in the Suffix dashboard.
     #[arg(long)]
     name: Option<String>,
+    /// Mint and replace the saved key instead of reusing a matching local key.
+    #[arg(long)]
+    renew: bool,
     /// Print the login URL instead of opening the browser.
     #[arg(long)]
     no_open: bool,
@@ -176,10 +179,16 @@ struct RemoveArgs {
 struct MoveArgs {
     /// Domain hostname or ID to move.
     domain: String,
-    /// Source stored account name or email.
-    from: String,
-    /// Target stored account name or email.
-    to: String,
+    /// Other stored account name or email. With two values, this is the target.
+    account: Option<String>,
+    /// Explicit target account when supplying both source and target accounts.
+    target: Option<String>,
+    /// Move from the active account to ACCOUNT (the default for one account).
+    #[arg(long, conflicts_with = "from")]
+    to: bool,
+    /// Move from ACCOUNT to the active account.
+    #[arg(long, conflicts_with = "to")]
+    from: bool,
     /// Skip the interactive confirmation prompt.
     #[arg(short = 'y', long)]
     yes: bool,
@@ -483,6 +492,19 @@ fn overview() -> Result<()> {
 }
 
 fn login(args: LoginArgs) -> Result<()> {
+    let login_email = login_email_hint(&args)?;
+    let mut config = load_config()?;
+    let account = login_account_name(&config, args.account.as_deref(), login_email.as_deref())?;
+    if !args.renew && saved_key_matches(&config, &account, login_email.as_deref()) {
+        config.active_account = Some(account.clone());
+        save_config(&config)?;
+        println!(
+            "Reusing saved {account} for {}",
+            config.accounts[&account].api_base
+        );
+        return Ok(());
+    }
+
     let listener =
         TcpListener::bind("127.0.0.1:0").context("could not bind the local login callback")?;
     listener
@@ -491,8 +513,6 @@ fn login(args: LoginArgs) -> Result<()> {
     let port = listener.local_addr()?.port();
     let state = random_state();
     let callback = format!("http://127.0.0.1:{port}/callback");
-    let account = normalize_account_name(args.account.as_deref().unwrap_or("default"))?;
-    let login_email = login_email_hint(&args)?;
     let key_name = args.name.unwrap_or_else(|| default_key_name(&account));
     let login_url = build_login_url(
         &args.app_url,
@@ -554,7 +574,6 @@ fn login(args: LoginArgs) -> Result<()> {
         .api_base
         .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
 
-    let mut config = load_config()?;
     config.api_base = None;
     config.api_key = None;
     config.active_account = Some(account.clone());
@@ -734,19 +753,18 @@ fn remove(args: RemoveArgs) -> Result<()> {
 
 fn move_domain(args: MoveArgs) -> Result<()> {
     let config = load_config()?;
-    let from_name = account_selector(&config, &args.from)?;
-    let to_name = account_selector(&config, &args.to)?;
+    let (from_name, to_name) = move_account_names(&config, &args)?;
     if from_name == to_name {
         bail!("source and target accounts are the same");
     }
     let from = config
         .accounts
         .get(&from_name)
-        .ok_or_else(|| anyhow!("no stored account matching {}", args.from))?;
+        .ok_or_else(|| anyhow!("no stored account matching {from_name}"))?;
     let to = config
         .accounts
         .get(&to_name)
-        .ok_or_else(|| anyhow!("no stored account matching {}", args.to))?;
+        .ok_or_else(|| anyhow!("no stored account matching {to_name}"))?;
     let target_key = to.api_key.as_deref().ok_or_else(|| {
         anyhow!(
             "{} is logged out; run `suffix login --account {to_name}`",
@@ -767,6 +785,32 @@ fn move_domain(args: MoveArgs) -> Result<()> {
             "targetApiKey": target_key,
         }),
     )
+}
+
+fn move_account_names(config: &Config, args: &MoveArgs) -> Result<(String, String)> {
+    let active = active_account(config)
+        .map(|(name, _)| name.to_string())
+        .ok_or_else(|| anyhow!("no active account; run `suffix login EMAIL` first"))?;
+    let account = args.account.as_deref().ok_or_else(|| {
+        anyhow!(
+            "pass an account: `suffix mv DOMAIN TARGET_EMAIL` or `suffix mv --from DOMAIN SOURCE_EMAIL`"
+        )
+    })?;
+    if let Some(target) = args.target.as_deref() {
+        if args.from || args.to {
+            bail!("--from and --to only apply when one account is supplied");
+        }
+        return Ok((
+            account_selector(config, account)?,
+            account_selector(config, target)?,
+        ));
+    }
+    let other = account_selector(config, account)?;
+    if args.from {
+        Ok((other, active))
+    } else {
+        Ok((active, other))
+    }
 }
 
 fn transfer_code(args: TransferArgs) -> Result<()> {
@@ -919,6 +963,46 @@ fn login_email_hint(args: &LoginArgs) -> Result<Option<String>> {
         }
         (Some(value), None) | (None, Some(value)) => Ok(Some(normalize_login_email(value)?)),
         (None, None) => Ok(None),
+    }
+}
+
+fn login_account_name(
+    config: &Config,
+    account_input: Option<&str>,
+    email: Option<&str>,
+) -> Result<String> {
+    if let Some(account) = account_input {
+        return normalize_account_name(account);
+    }
+    if let Some(email) = email {
+        if let Some((name, _)) = config.accounts.iter().find(|(_, account)| {
+            account
+                .email
+                .as_deref()
+                .map(|saved| saved.eq_ignore_ascii_case(email))
+                .unwrap_or(false)
+        }) {
+            return Ok(name.clone());
+        }
+        return normalize_account_name(email);
+    }
+    if let Some((name, _)) = active_account(config) {
+        return Ok(name.to_string());
+    }
+    bail!("pass an email or --account when logging in for the first time")
+}
+
+fn saved_key_matches(config: &Config, account: &str, email: Option<&str>) -> bool {
+    let Some(saved) = config.accounts.get(account) else {
+        return false;
+    };
+    if saved.api_key.is_none() {
+        return false;
+    }
+    match (email, saved.email.as_deref()) {
+        (Some(expected), Some(actual)) => actual.eq_ignore_ascii_case(expected),
+        (Some(_), None) => false,
+        (None, _) => true,
     }
 }
 
@@ -1147,7 +1231,10 @@ fn load_config() -> Result<Config> {
         fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
     let mut config: Config =
         toml::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))?;
-    migrate_single_account_config(&mut config);
+    if discard_legacy_profiles(&mut config) {
+        fs::write(&path, toml::to_string(&config)?)
+            .with_context(|| format!("could not update {}", path.display()))?;
+    }
     Ok(config)
 }
 
@@ -1235,30 +1322,20 @@ fn first_logged_in_account(config: &Config) -> Option<String> {
         .map(|(name, _)| name.clone())
 }
 
-fn migrate_single_account_config(config: &mut Config) {
-    if config.accounts.is_empty()
-        && let (Some(api_base), Some(api_key)) = (config.api_base.take(), config.api_key.take())
-    {
-        config.accounts.insert(
-            "default".to_string(),
-            AccountConfig {
-                api_base,
-                api_key: Some(api_key),
-                email: None,
-                domain_count: None,
-                link_count: None,
-                visit_count: None,
-                last_checked_at: None,
-                last_error: None,
-            },
-        );
-        config.active_account = Some("default".to_string());
+fn discard_legacy_profiles(config: &mut Config) -> bool {
+    let mut changed = config.api_base.take().is_some();
+    changed |= config.api_key.take().is_some();
+    changed |= config.accounts.remove("default").is_some();
+    if config.active_account.as_deref() == Some("default") {
+        config.active_account = config.accounts.keys().next().cloned();
+        changed = true;
     }
+    changed
 }
 
 fn print_accounts(config: &Config, long: bool) {
     if config.accounts.is_empty() {
-        println!("No accounts. Run `suffix login --account NAME`.");
+        println!("No accounts. Run `suffix login EMAIL` or `suffix login --account NAME`.");
         return;
     }
     let active = active_account(config).map(|(name, _)| name);
@@ -1336,9 +1413,9 @@ fn normalize_account_name(value: &str) -> Result<String> {
     }
     if !name
         .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '@'))
     {
-        bail!("account names may use letters, numbers, dash, underscore, or dot");
+        bail!("account names may use letters, numbers, dash, underscore, dot, or @");
     }
     Ok(name.to_string())
 }
@@ -1808,6 +1885,114 @@ mod tests {
     }
 
     #[test]
+    fn move_uses_the_active_account_when_one_other_account_is_given() {
+        let mut config = Config::default();
+        config.active_account = Some("personal@example.com".to_string());
+        for email in ["personal@example.com", "work@example.com"] {
+            config.accounts.insert(
+                email.to_string(),
+                AccountConfig {
+                    api_base: DEFAULT_API_BASE.to_string(),
+                    api_key: Some(format!("key-{email}")),
+                    email: Some(email.to_string()),
+                    domain_count: None,
+                    link_count: None,
+                    visit_count: None,
+                    last_checked_at: None,
+                    last_error: None,
+                },
+            );
+        }
+
+        let to = MoveArgs {
+            domain: "go.example.com".to_string(),
+            account: Some("work@example.com".to_string()),
+            target: None,
+            to: false,
+            from: false,
+            yes: false,
+        };
+        assert_eq!(
+            move_account_names(&config, &to).unwrap(),
+            (
+                "personal@example.com".to_string(),
+                "work@example.com".to_string()
+            )
+        );
+
+        let from = MoveArgs { from: true, ..to };
+        assert_eq!(
+            move_account_names(&config, &from).unwrap(),
+            (
+                "work@example.com".to_string(),
+                "personal@example.com".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn email_login_reuses_the_matching_saved_profile() {
+        let mut config = Config::default();
+        config.accounts.insert(
+            "default".to_string(),
+            AccountConfig {
+                api_base: DEFAULT_API_BASE.to_string(),
+                api_key: Some("curtail_sk_saved".to_string()),
+                email: Some("person@example.com".to_string()),
+                domain_count: None,
+                link_count: None,
+                visit_count: None,
+                last_checked_at: None,
+                last_error: None,
+            },
+        );
+
+        let account = login_account_name(&config, None, Some("person@example.com")).unwrap();
+        assert_eq!(account, "default");
+        assert!(saved_key_matches(
+            &config,
+            &account,
+            Some("person@example.com")
+        ));
+    }
+
+    #[test]
+    fn email_login_uses_a_distinct_profile_for_a_new_account() {
+        let config = Config::default();
+        let account = login_account_name(&config, None, Some("work@example.com")).unwrap();
+        assert_eq!(account, "work@example.com");
+        assert!(!saved_key_matches(
+            &config,
+            &account,
+            Some("work@example.com")
+        ));
+    }
+
+    #[test]
+    fn saved_key_is_not_reused_for_a_different_email() {
+        let mut config = Config::default();
+        config.accounts.insert(
+            "shared".to_string(),
+            AccountConfig {
+                api_base: DEFAULT_API_BASE.to_string(),
+                api_key: Some("curtail_sk_saved".to_string()),
+                email: Some("person@example.com".to_string()),
+                domain_count: None,
+                link_count: None,
+                visit_count: None,
+                last_checked_at: None,
+                last_error: None,
+            },
+        );
+
+        assert!(!saved_key_matches(
+            &config,
+            "shared",
+            Some("other@example.com"),
+        ));
+    }
+
+    #[test]
     fn callback_parser_reads_key_state_and_api_base() {
         let request = concat!(
             "GET /callback?state=s1&key=curtail_sk_abc&api_base=https%3A%2F%2Fsuffix.org%2Fapi%2Fv1 HTTP/1.1\r\n",
@@ -1978,9 +2163,31 @@ mod tests {
         match cli.command {
             Some(Command::Mv(args)) => {
                 assert_eq!(args.domain, "pair.rs");
-                assert_eq!(args.from, "owner@example.com");
-                assert_eq!(args.to, "target@example.com");
+                assert_eq!(args.account.as_deref(), Some("owner@example.com"));
+                assert_eq!(args.target.as_deref(), Some("target@example.com"));
                 assert!(args.yes);
+            }
+            _ => panic!("expected move command"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["suffix", "mv", "--to", "pair.rs", "target@example.com"]).unwrap();
+        match cli.command {
+            Some(Command::Mv(args)) => {
+                assert_eq!(args.account.as_deref(), Some("target@example.com"));
+                assert!(args.to);
+                assert!(!args.from);
+            }
+            _ => panic!("expected move command"),
+        }
+
+        let cli = Cli::try_parse_from(["suffix", "mv", "--from", "pair.rs", "owner@example.com"])
+            .unwrap();
+        match cli.command {
+            Some(Command::Mv(args)) => {
+                assert_eq!(args.account.as_deref(), Some("owner@example.com"));
+                assert!(args.from);
+                assert!(!args.to);
             }
             _ => panic!("expected move command"),
         }
@@ -2044,24 +2251,32 @@ mod tests {
     }
 
     #[test]
-    fn single_account_config_migrates_to_named_accounts() {
+    fn legacy_default_profiles_are_discarded() {
         let mut config = Config {
             api_base: Some("https://suffix.org/api/v1".to_string()),
             api_key: Some("curtail_sk_old".to_string()),
-            active_account: None,
+            active_account: Some("default".to_string()),
             accounts: BTreeMap::new(),
         };
-        migrate_single_account_config(&mut config);
-        assert_eq!(config.active_account.as_deref(), Some("default"));
+        config.accounts.insert(
+            "default".to_string(),
+            AccountConfig {
+                api_base: DEFAULT_API_BASE.to_string(),
+                api_key: Some("curtail_sk_old".to_string()),
+                email: None,
+                domain_count: None,
+                link_count: None,
+                visit_count: None,
+                last_checked_at: None,
+                last_error: None,
+            },
+        );
+
+        assert!(discard_legacy_profiles(&mut config));
+        assert!(config.active_account.is_none());
         assert!(config.api_base.is_none());
         assert!(config.api_key.is_none());
-        assert_eq!(
-            config
-                .accounts
-                .get("default")
-                .and_then(|account| account.api_key.as_deref()),
-            Some("curtail_sk_old")
-        );
+        assert!(config.accounts.is_empty());
     }
 
     #[test]

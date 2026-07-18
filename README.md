@@ -9,17 +9,18 @@ Rust CLI client for [suffix.org](https://suffix.org), the public API surface for
 Seed the CLI with a browser login:
 
 ```sh
-suffix login
 suffix login person@example.com
 ```
 
-The CLI opens `suffix.org`, starts a loopback callback on `127.0.0.1`, and waits. Passing an email sends it as a browser sign-in hint, which is useful when you need to mint a key for another Suffix account. After normal browser sign-in, the dashboard asks you to approve a one-time API key for the CLI and redirects the secret back to the local listener. The key is stored in your platform config directory under `suffix/config.toml`.
+The CLI opens `suffix.org`, starts a loopback callback on `127.0.0.1`, and waits. Passing an email selects a saved profile for that email, or creates a separate profile named after it. Once a profile has a key, repeating `suffix login EMAIL` reuses that local key and switches to the profile without opening the browser. Use `suffix login EMAIL --renew` only when you intentionally want to replace the key. A new browser approval creates a one-time API key and redirects it to the local listener; the key is then stored in your platform config directory under `suffix/config.toml`. Old unnamed `default` profiles are discarded; sign in again with each account's email.
 
-Store several accounts by naming each login:
+Store several accounts by email or by an explicit profile name:
 
 ```sh
 suffix login --account personal
 suffix login --account work
+suffix login personal@example.com
+suffix login work@example.com
 suffix account
 suffix account personal
 ```
@@ -61,6 +62,9 @@ suffix domain add go.example.com
 suffix domain rm <domain-id>
 suffix transfer go.example.com --to person@example.com
 suffix accept SUF-X7K9-Q2M
+suffix mv go.example.com target@example.com
+suffix mv --to go.example.com target@example.com
+suffix mv --from go.example.com owner@example.com
 suffix mv go.example.com owner@example.com target@example.com
 
 suffix account
@@ -81,7 +85,7 @@ Bare `suffix` prints the same shortcut view as `suffix ls -l`, then the same cac
 
 `suffix transfer DOMAIN --to EMAIL` creates a short-lived code for moving a domain out of the active account. The receiving account signs in separately and runs `suffix accept CODE`, or pastes the code into the Suffix dashboard. `--to` is optional but recommended because it pins acceptance to that email address.
 
-`suffix mv DOMAIN FROM_EMAIL_OR_NAME TO_EMAIL_OR_NAME` remains available for local power users with both accounts already logged in. It prompts for `move DOMAIN` before sending the request; use `--yes` only for scripts. The source account signs the request, and the target account's saved key proves the receiving account.
+`suffix mv DOMAIN TARGET_EMAIL_OR_NAME` moves a domain from the active account to the named target account. `--to` is an optional explicit spelling of that direction. `suffix mv --from DOMAIN SOURCE_EMAIL_OR_NAME` moves from the named source account to the active account. `suffix mv DOMAIN FROM_EMAIL_OR_NAME TO_EMAIL_OR_NAME` remains available when you want both accounts explicit. All forms require both saved keys, prompt for `move DOMAIN` before sending the request, and accept `--yes` only for scripts. The source account signs the request, and the target account's saved key proves the receiving account.
 
 `suffix account ls` is offline and prints saved account identities with `logged in` or `logged out`; `-l`/`--long` adds cached base URL, domain/link/visit counts, and any cached status fields. `suffix logout EMAIL_OR_NAME` removes the saved API key but keeps the cached account row.
 

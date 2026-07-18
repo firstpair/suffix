@@ -19,8 +19,12 @@ to approve and store a bearer key through the browser.
 .SH COMMANDS
 .TP
 .B login [email]
-Open a browser login flow and save a one-time API key. The optional email is a
-sign-in hint.
+Select or create a saved profile for the optional email. A matching saved key is
+reused without opening the browser. Use
+.B --renew
+to open the browser and replace that key intentionally.
+Old unnamed default profiles are discarded; sign in again with an email or an
+explicit profile name.
 .TP
 .B ls [--json|--yaml|--xml] [-l|--stats]
 List shortcuts. The normal output is tab-separated shortcut and destination
@@ -44,6 +48,14 @@ Create a short-lived code for moving a domain to another account.
 .TP
 .B accept \fIcode\fR
 Accept a domain-transfer code into the active account.
+.TP
+.B mv [--to|--from] \fIdomain\fR \fIaccount\fR
+Move a domain between two saved accounts. By default, or with
+.B --to,
+move from the active account to the named account. With
+.B --from,
+move from the named account to the active account. Supplying a second account
+uses the explicit source-and-target form.
 .TP
 .B account [ls|add|rm|name]
 List, add, remove, or select saved account profiles.
