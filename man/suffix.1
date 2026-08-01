@@ -36,7 +36,20 @@ Create a shortcut. Use a hostname-and-tail value such as
 .B pair.rs/typesec
 or use
 .B -d
-with an explicit domain hostname.
+with an explicit domain hostname. Top-tier accounts may pass
+.B --photo
+and choose
+.B --photo-mode local|remote.
+Local mode asks the service to store and directly serve a managed image copy;
+remote mode resolves to the original and is the default. On a public Photo URL,
+.B ?L
+and
+.B ?R
+override the saved mode for one request.
+.TP
+.B photo \fIshortcut-id\fR (-l|--local|-r|--remote) [--version \fIversion\fR]
+Change the saved serving mode of an existing Photo shortcut. If no version is
+supplied, Suffix reads it before updating.
 .TP
 .B rm \fIshortcut-id\fR [--version \fIversion\fR]
 Delete a shortcut. If no version is supplied, Suffix reads it before deleting.

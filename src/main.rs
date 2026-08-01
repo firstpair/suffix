@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use rand::{RngExt, distr::Alphanumeric};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,8 @@ enum Command {
     Add(AddArgs),
     /// Remove a shortcut.
     Rm(RemoveArgs),
+    /// Choose whether a Photo shortcut serves its stored or original image.
+    Photo(PhotoArgs),
     /// Move a domain between logged-in accounts.
     Mv(MoveArgs),
     /// Create a short-lived transfer code for a domain.
@@ -167,6 +169,46 @@ struct AddArgs {
     /// Optional shortcut title.
     #[arg(long)]
     title: Option<String>,
+    /// Create a top-tier Photo shortcut instead of a redirect.
+    #[arg(long)]
+    photo: bool,
+    /// Default Photo source. Local stores and serves a managed copy; remote uses the original.
+    #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
+    photo_mode: PhotoMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+enum PhotoMode {
+    Local,
+    Remote,
+}
+
+#[derive(Args)]
+struct PhotoArgs {
+    /// Photo shortcut ID.
+    id: String,
+    /// Serve the account-stored image by default.
+    #[arg(
+        short = 'l',
+        long,
+        conflicts_with = "remote",
+        required_unless_present = "remote"
+    )]
+    local: bool,
+    /// Resolve to the original image by default.
+    #[arg(
+        short = 'r',
+        long,
+        conflicts_with = "local",
+        required_unless_present = "local"
+    )]
+    remote: bool,
+    /// Saved account email to modify instead of the active account.
+    account: Option<String>,
+    /// Shortcut version. If omitted, suffix looks it up first.
+    #[arg(long)]
+    version: Option<u64>,
 }
 
 #[derive(Args)]
@@ -282,6 +324,10 @@ enum ShortcutCommand {
         target_url: String,
         #[arg(long)]
         title: Option<String>,
+        #[arg(long)]
+        photo: bool,
+        #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
+        photo_mode: PhotoMode,
     },
     /// Update a shortcut with optimistic concurrency.
     Update {
@@ -299,6 +345,10 @@ enum ShortcutCommand {
         title: Option<String>,
         #[arg(long, default_value_t = true)]
         active: bool,
+        #[arg(long)]
+        photo: bool,
+        #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
+        photo_mode: PhotoMode,
     },
     /// Delete a shortcut with optimistic concurrency.
     Delete {
@@ -427,6 +477,7 @@ fn main() -> Result<()> {
         }
         Some(Command::Add(args)) => add(args),
         Some(Command::Rm(args)) => remove(args),
+        Some(Command::Photo(args)) => configure_photo(args),
         Some(Command::Mv(args)) => move_domain(args),
         Some(Command::Transfer(args)) => transfer_code(args),
         Some(Command::Accept(args)) => accept_transfer(args),
@@ -456,13 +507,13 @@ fn main() -> Result<()> {
             let api = Api::from_config()?;
             match args.command {
                 ShortcutCommand::List => api.get("shortcuts"),
-                ShortcutCommand::Create { domain_id, tail, target_url, title } => api.post(
+                ShortcutCommand::Create { domain_id, tail, target_url, title, photo, photo_mode } => api.post(
                     "shortcuts",
-                    json!({ "domainId": domain_id, "tail": tail, "targetUrl": target_url, "title": title }),
+                    shortcut_payload(json!({ "domainId": domain_id, "tail": tail, "targetUrl": target_url, "title": title }), photo, photo_mode),
                 ),
-                ShortcutCommand::Update { id, version, domain_id, tail, target_url, title, active } => api.patch(
+                ShortcutCommand::Update { id, version, domain_id, tail, target_url, title, active, photo, photo_mode } => api.patch(
                     "shortcuts",
-                    json!({
+                    shortcut_payload(json!({
                         "id": id,
                         "version": version,
                         "domainId": domain_id,
@@ -470,7 +521,7 @@ fn main() -> Result<()> {
                         "targetUrl": target_url,
                         "title": title,
                         "isActive": active,
-                    }),
+                    }), photo, photo_mode),
                 ),
                 ShortcutCommand::Delete { id, version } => {
                     api.delete(&format!("shortcuts?id={}&version={}", encode(&id), version))
@@ -632,17 +683,47 @@ fn add(args: AddArgs) -> Result<()> {
     let config = load_config()?;
     let api = api_for_account(&config, add_account(&args))?;
     let shortcut = shortcut_add_fields(&args)?;
-    let mut payload = json!({
-        "tail": shortcut.tail,
-        "targetUrl": shortcut.target_url,
-        "title": args.title,
-    });
+    let mut payload = shortcut_payload(
+        json!({
+            "tail": shortcut.tail,
+            "targetUrl": shortcut.target_url,
+            "title": args.title,
+        }),
+        args.photo,
+        args.photo_mode,
+    );
     match shortcut.domain {
         ShortcutAddDomain::Hostname(hostname) => payload["domain"] = json!(hostname),
         ShortcutAddDomain::Id(domain_id) => payload["domainId"] = json!(domain_id),
         ShortcutAddDomain::Default => payload["domainId"] = json!(api.default_domain_id()?),
     }
     api.post("shortcuts", payload)
+}
+
+fn shortcut_payload(mut payload: Value, photo: bool, photo_mode: PhotoMode) -> Value {
+    if photo {
+        payload["type"] = json!("photo");
+        payload["photoMode"] = json!(photo_mode);
+    }
+    payload
+}
+
+fn configure_photo(args: PhotoArgs) -> Result<()> {
+    let config = load_config()?;
+    let api = api_for_account(&config, args.account.as_deref())?;
+    let version = match args.version {
+        Some(value) => value,
+        None => api.shortcut_version(&args.id)?,
+    };
+    let mode = if args.local {
+        PhotoMode::Local
+    } else {
+        PhotoMode::Remote
+    };
+    api.patch(
+        "shortcuts",
+        json!({ "id": args.id, "version": version, "type": "photo", "photoMode": mode }),
+    )
 }
 
 fn logout(account: &str) -> Result<()> {
@@ -2178,6 +2259,42 @@ mod tests {
             }
             _ => panic!("expected rm command"),
         }
+    }
+
+    #[test]
+    fn photo_commands_parse_and_build_api_fields() {
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "add",
+            "foto.gs/sunset",
+            "https://example.com/sunset.jpg",
+            "--photo",
+            "--photo-mode",
+            "local",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Add(args)) => {
+                assert!(args.photo);
+                assert_eq!(args.photo_mode, PhotoMode::Local);
+                let payload = shortcut_payload(json!({}), args.photo, args.photo_mode);
+                assert_eq!(payload, json!({ "type": "photo", "photoMode": "local" }));
+            }
+            _ => panic!("expected add command"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["suffix", "photo", "shortcut-1", "-r", "--version", "4"]).unwrap();
+        match cli.command {
+            Some(Command::Photo(args)) => {
+                assert!(!args.local);
+                assert!(args.remote);
+                assert_eq!(args.version, Some(4));
+            }
+            _ => panic!("expected photo command"),
+        }
+
+        assert!(Cli::try_parse_from(["suffix", "photo", "shortcut-1", "-l", "-r"]).is_err());
     }
 
     #[test]
