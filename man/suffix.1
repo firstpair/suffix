@@ -1,4 +1,4 @@
-.TH SUFFIX 1 2026-07-17 "Suffix 0.1.1" "User Commands"
+.TH SUFFIX 1 2026-08-02 "Suffix 0.1.3" "User Commands"
 .SH NAME
 suffix \- manage durable short links on domains you own
 .SH SYNOPSIS
@@ -50,6 +50,13 @@ override the saved mode for one request.
 .B photo \fIshortcut-id\fR (-l|--local|-r|--remote) [--version \fIversion\fR]
 Change the saved serving mode of an existing Photo shortcut. If no version is
 supplied, Suffix reads it before updating.
+.TP
+.B upload [options] \fIhost/tail file\fR [\fIaccount\fR]
+Upload a Business file, up to 100 MB, into the account-scoped Suffix Blob store
+and create a shortcut that downloads it. Deleting the shortcut removes the
+managed object. Use
+.B -d \fIhost tail file\fR
+for an explicit hostname.
 .TP
 .B rm \fIshortcut-id\fR [--version \fIversion\fR]
 Delete a shortcut. If no version is supplied, Suffix reads it before deleting.

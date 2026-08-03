@@ -54,6 +54,7 @@ suffix add -d pair.rs typesec https://github.com/querygraph/typesec
 suffix add https://example.com launch --domain-id <uuid>
 suffix add foto.gs/sunset https://example.com/sunset.jpg --photo --photo-mode local
 suffix photo <shortcut-id> -r
+suffix upload files.example/report ./report.pdf
 suffix rm <shortcut-id> --version <version>
 suffix stats <shortcut-id> --days 30
 
@@ -88,6 +89,8 @@ Bare `suffix` prints the same shortcut view as `suffix ls -l`, then the same cac
 `suffix domain ls [EMAIL]` prints tab-separated `domain<TAB>status`; `-l`/`--stats` adds aggregate shortcut visits as the third column. The same optional trailing account email applies to `suffix add`, `suffix rm`, `suffix stats`, `suffix domain add`, and `suffix domain rm`. `--json`, `--yaml`, and `--xml` emit verbose normalized domain records.
 
 Top-tier accounts can create a Photo shortcut with `suffix add ... --photo`. `--photo-mode local` asks Suffix to keep and directly serve a managed copy of the target image; `remote` keeps normal resolution to the original and is the default. Change that default later with `suffix photo SHORTCUT_ID -l`/`--local` or `-r`/`--remote` (and optionally `--version VERSION`). On the public Photo URL, `?L` requests the local copy and `?R` requests the remote original for that request without changing the saved default. Plan enforcement, image validation/ingestion, storage, and these request overrides are implemented by the Suffix API and Vercel application; the CLI sends the corresponding `type: "photo"` and `photoMode: "local" | "remote"` fields.
+
+Business accounts can upload a local file and create its short URL in one step with `suffix upload HOST/TAIL PATH`. Files go directly to an account-scoped Vercel Blob path and may be up to 100 MB. The short URL downloads the managed file, and deleting the shortcut removes its Blob object. `-d HOST TAIL PATH`, `--domain-id`, `--title`, and a trailing saved-account email follow the same conventions as `suffix add`.
 
 `suffix transfer DOMAIN --to EMAIL` creates a short-lived code for moving a domain out of the active account. The receiving account signs in separately and runs `suffix accept CODE`, or pastes the code into the Suffix dashboard. `--to` is optional but recommended because it pins acceptance to that email address.
 

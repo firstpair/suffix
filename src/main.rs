@@ -37,6 +37,8 @@ enum Command {
     Ls(ListArgs),
     /// Add a shortcut.
     Add(AddArgs),
+    /// Upload a Business file and create a shortcut for it.
+    Upload(UploadArgs),
     /// Remove a shortcut.
     Rm(RemoveArgs),
     /// Choose whether a Photo shortcut serves its stored or original image.
@@ -175,6 +177,25 @@ struct AddArgs {
     /// Default Photo source. Local stores and serves a managed copy; remote uses the original.
     #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
     photo_mode: PhotoMode,
+}
+
+#[derive(Args)]
+struct UploadArgs {
+    /// Shortcut domain hostname. Example: `suffix upload -d pair.rs report ./report.pdf`.
+    #[arg(short = 'd', long = "domain", value_name = "HOST")]
+    domain: Option<String>,
+    /// `HOST/TAIL`, or TAIL when --domain is supplied.
+    value: String,
+    /// Local file to upload.
+    file: PathBuf,
+    /// Saved account email to modify instead of the active account.
+    account: Option<String>,
+    /// Domain ID. Defaults to the first owned domain when no hostname is supplied.
+    #[arg(long)]
+    domain_id: Option<String>,
+    /// Optional shortcut title.
+    #[arg(long)]
+    title: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
@@ -476,6 +497,7 @@ fn main() -> Result<()> {
             }
         }
         Some(Command::Add(args)) => add(args),
+        Some(Command::Upload(args)) => upload_file(args),
         Some(Command::Rm(args)) => remove(args),
         Some(Command::Photo(args)) => configure_photo(args),
         Some(Command::Mv(args)) => move_domain(args),
@@ -706,6 +728,178 @@ fn shortcut_payload(mut payload: Value, photo: bool, photo_mode: PhotoMode) -> V
         payload["photoMode"] = json!(photo_mode);
     }
     payload
+}
+
+fn upload_file(args: UploadArgs) -> Result<()> {
+    let metadata = fs::metadata(&args.file)
+        .with_context(|| format!("could not read {}", args.file.display()))?;
+    if !metadata.is_file() {
+        bail!("{} is not a regular file", args.file.display());
+    }
+    if metadata.len() == 0 || metadata.len() > 100 * 1024 * 1024 {
+        bail!("files must be between 1 byte and 100 MB");
+    }
+    let file_name = safe_upload_name(
+        args.file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow!("file name must be valid Unicode"))?,
+    );
+    let config = load_config()?;
+    let api = api_for_account(&config, args.account.as_deref())?;
+    let (domain, tail) = upload_locator(&args)?;
+    let domain = match domain {
+        ShortcutAddDomain::Default => ShortcutAddDomain::Id(api.default_domain_id()?),
+        selected => selected,
+    };
+    let account_id = api.account_id()?;
+    let pathname = format!(
+        "files/suffix/{}/{}/{}",
+        account_id,
+        random_uuid(),
+        file_name
+    );
+    let token = api.request_json(api.client.post(api.url("files")?).json(&json!({
+        "type": "blob.generate-client-token",
+        "payload": { "pathname": pathname, "multipart": false, "clientPayload": null }
+    })))?;
+    let client_token = token
+        .get("clientToken")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Suffix did not return a file upload token"))?;
+    let bytes =
+        fs::read(&args.file).with_context(|| format!("could not read {}", args.file.display()))?;
+    let content_type = file_content_type(&file_name);
+    let upload_client = Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .context("could not build file upload client")?;
+    let uploaded: Value = upload_client
+        .put("https://vercel.com/api/blob/")
+        .query(&[("pathname", pathname.as_str())])
+        .bearer_auth(client_token)
+        .header("x-api-version", "12")
+        .header("x-vercel-blob-access", "public")
+        .header("x-content-type", content_type)
+        .header("content-type", content_type)
+        .body(bytes)
+        .send()
+        .context("file upload failed")?
+        .error_for_status()
+        .context("Blob rejected the file upload")?
+        .json()
+        .context("Blob returned an invalid upload response")?;
+    let blob_url = uploaded
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Blob upload did not return a URL"))?;
+    let download_url = uploaded
+        .get("downloadUrl")
+        .and_then(Value::as_str)
+        .unwrap_or(blob_url);
+    let mut payload = json!({
+        "type": "file",
+        "tail": tail,
+        "targetUrl": download_url,
+        "fileUrl": blob_url,
+        "fileName": file_name,
+        "title": args.title,
+    });
+    match domain {
+        ShortcutAddDomain::Hostname(hostname) => payload["domain"] = json!(hostname),
+        ShortcutAddDomain::Id(domain_id) => payload["domainId"] = json!(domain_id),
+        ShortcutAddDomain::Default => {
+            unreachable!("default upload domain was resolved before upload")
+        }
+    }
+    if let Err(error) = api.post("shortcuts", payload) {
+        let _ = api.request_json(
+            api.client
+                .post(api.url("files")?)
+                .json(&json!({ "action": "cleanup", "url": blob_url })),
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn upload_locator(args: &UploadArgs) -> Result<(ShortcutAddDomain, String)> {
+    if let Some(hostname) = &args.domain {
+        return Ok((
+            ShortcutAddDomain::Hostname(hostname.clone()),
+            args.value.clone(),
+        ));
+    }
+    if let Some((hostname, tail)) = args.value.split_once('/')
+        && !hostname.is_empty()
+        && !tail.is_empty()
+        && !tail.contains('/')
+    {
+        return Ok((
+            ShortcutAddDomain::Hostname(hostname.to_string()),
+            tail.to_string(),
+        ));
+    }
+    Ok((
+        args.domain_id
+            .clone()
+            .map_or(ShortcutAddDomain::Default, ShortcutAddDomain::Id),
+        args.value.clone(),
+    ))
+}
+
+fn safe_upload_name(value: &str) -> String {
+    let name: String = value
+        .chars()
+        .map(|ch| {
+            if ch == '/' || ch == '\\' || ch.is_control() {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let trimmed = name.trim();
+    let safe = if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        "download"
+    } else {
+        trimmed
+    };
+    safe.chars().take(180).collect()
+}
+
+fn file_content_type(name: &str) -> &'static str {
+    match Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pdf" => "application/pdf",
+        "txt" | "md" | "csv" => "text/plain",
+        "json" => "application/json",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "zip" => "application/zip",
+        "mp4" => "video/mp4",
+        "mp3" => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
+}
+
+fn random_uuid() -> String {
+    let value = format!("{:032x}", rand::random::<u128>());
+    format!(
+        "{}-{}-4{}-8{}-{}",
+        &value[0..8],
+        &value[8..12],
+        &value[13..16],
+        &value[17..20],
+        &value[20..32]
+    )
 }
 
 fn configure_photo(args: PhotoArgs) -> Result<()> {
@@ -1305,6 +1499,18 @@ impl Api {
             .ok_or_else(|| anyhow!("suffix.org returned a domain without an id"))
     }
 
+    fn account_id(&self) -> Result<String> {
+        let payload = self.request_json(self.client.get(self.url("domains")?))?;
+        payload
+            .get("domains")
+            .and_then(Value::as_array)
+            .and_then(|domains| domains.first())
+            .and_then(|domain| domain.get("ownerAccountId"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow!("no owned domain was available to identify the Suffix account"))
+    }
+
     fn shortcut_version(&self, id: &str) -> Result<u64> {
         let payload = self.request_json(self.client.get(self.url("shortcuts")?))?;
         let shortcuts = payload
@@ -1329,6 +1535,7 @@ fn route_resource(resource: &str) -> Result<&'static str> {
         "domains" => Ok("domains"),
         "transfers" => Ok("transfers"),
         "stats" => Ok("stats"),
+        "files" => Ok("files"),
         _ => bail!("unsupported API resource {name}"),
     }
 }
@@ -2620,5 +2827,33 @@ mod tests {
         assert!(yaml.contains("- id: \"domain-1\""));
         assert!(yaml.contains("owner_email: \"test@example.com\""));
         assert!(yaml.contains("vercel_misconfigured: true"));
+    }
+
+    #[test]
+    fn upload_command_parses_and_sanitizes_file_names() {
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "upload",
+            "files.example/report",
+            "./Board Notes.pdf",
+            "--title",
+            "Board report",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Upload(args)) => {
+                assert_eq!(args.value, "files.example/report");
+                assert_eq!(args.file, PathBuf::from("./Board Notes.pdf"));
+                let (domain, tail) = upload_locator(&args).unwrap();
+                assert!(
+                    matches!(domain, ShortcutAddDomain::Hostname(value) if value == "files.example")
+                );
+                assert_eq!(tail, "report");
+            }
+            _ => panic!("expected upload command"),
+        }
+        assert_eq!(safe_upload_name("../secret\0.txt"), ".._secret_.txt");
+        assert_eq!(file_content_type("report.pdf"), "application/pdf");
+        assert_eq!(random_uuid().len(), 36);
     }
 }
