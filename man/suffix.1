@@ -1,4 +1,4 @@
-.TH SUFFIX 1 2026-08-02 "Suffix 0.1.3" "User Commands"
+.TH SUFFIX 1 2026-08-03 "Suffix 0.1.4" "User Commands"
 .SH NAME
 suffix \- manage durable short links on domains you own
 .SH SYNOPSIS
@@ -9,6 +9,12 @@ suffix \- manage durable short links on domains you own
 .B suffix man install
 .RI [ --dir " man1-directory" ]
 .SH DESCRIPTION
+.PP
+Stored Business photos and uploaded files may be protected with
+.BR --protect .
+The password is prompted without echo. Use
+.B --password-file PATH
+for automation. Photo protection applies to local mode and ?L, not ?R.
 .B suffix
 is the command-line client for the Suffix canonical API at
 .B https://suffix.org/api/v1.
@@ -31,6 +37,10 @@ List shortcuts. The normal output is tab-separated shortcut and destination
 columns. A trailing saved account email selects that account
 without changing the active profile.
 .TP
+.B search \fIregexp\fR [\fIaccount\fR]
+Search both short URLs and destination targets with a case-insensitive regular
+expression. Output is tab-separated match scope, shortcut, and target.
+.TP
 .B add [options] \fIvalue\fR [\fItail\fR] [\fItarget-url\fR]
 Create a shortcut. Use a hostname-and-tail value such as
 .B pair.rs/typesec
@@ -46,10 +56,24 @@ remote mode resolves to the original and is the default. On a public Photo URL,
 and
 .B ?R
 override the saved mode for one request.
+Before creation, Suffix offers to reuse an existing shortcut for the same
+target or edit an occupied tail. Scripts must opt in with
+.B --allow-duplicate-target
+or
+.B --edit-existing.
 .TP
-.B photo \fIshortcut-id\fR (-l|--local|-r|--remote) [--version \fIversion\fR]
-Change the saved serving mode of an existing Photo shortcut. If no version is
-supplied, Suffix reads it before updating.
+.B edit \fIshortcut-id\fR [--tail \fItail\fR] [--target-url \fIurl\fR] [--title \fIlabel\fR] [--active \fIbool\fR]
+Edit selected shortcut fields. If no version is supplied, Suffix reads it first.
+.TP
+.B photo \fIshortcut-id\fR (-l|--local|-r|--remote|--drop) [--version \fIversion\fR]
+Change the saved serving mode of an existing Photo shortcut, or remove its
+managed image with
+.BR --drop .
+If no version is supplied, Suffix reads it before updating.
+.TP
+.B password \fIshortcut-id\fR (--add|--remove) [--password-file \fIpath\fR]
+Add, change, or remove password protection on a stored photo or managed file.
+Without a password file, adding prompts securely without echo.
 .TP
 .B upload [options] \fIhost/tail file\fR [\fIaccount\fR]
 Upload a Business file, up to 100 MB, into the account-scoped Suffix Blob store

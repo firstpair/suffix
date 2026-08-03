@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::{self, Read, Write},
+    io::{self, IsTerminal, Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     thread,
@@ -11,6 +11,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rand::{RngExt, distr::Alphanumeric};
+use regex::RegexBuilder;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,14 +36,20 @@ enum Command {
     Logout { account: String },
     /// List shortcuts.
     Ls(ListArgs),
+    /// Search shortcut URLs and targets with a regular expression.
+    Search(SearchArgs),
     /// Add a shortcut.
     Add(AddArgs),
+    /// Edit an existing shortcut.
+    Edit(EditArgs),
     /// Upload a Business file and create a shortcut for it.
     Upload(UploadArgs),
     /// Remove a shortcut.
     Rm(RemoveArgs),
     /// Choose whether a Photo shortcut serves its stored or original image.
     Photo(PhotoArgs),
+    /// Add, change, or remove a stored-object password.
+    Password(PasswordArgs),
     /// Move a domain between logged-in accounts.
     Mv(MoveArgs),
     /// Create a short-lived transfer code for a domain.
@@ -135,6 +142,14 @@ struct ListArgs {
 }
 
 #[derive(Args)]
+struct SearchArgs {
+    /// Case-insensitive regular expression matched against short URLs and targets.
+    pattern: String,
+    /// Saved account email to query instead of the active account.
+    account: Option<String>,
+}
+
+#[derive(Args)]
 struct DomainListArgs {
     /// Saved account email to query instead of the active account.
     account: Option<String>,
@@ -177,6 +192,18 @@ struct AddArgs {
     /// Default Photo source. Local stores and serves a managed copy; remote uses the original.
     #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
     photo_mode: PhotoMode,
+    /// Create another shortcut even when this target already has one.
+    #[arg(long)]
+    allow_duplicate_target: bool,
+    /// Replace an occupied tail's destination instead of failing.
+    #[arg(long)]
+    edit_existing: bool,
+    /// Password-protect the stored photo. The remote target remains public.
+    #[arg(long, requires = "photo")]
+    protect: bool,
+    /// Read the storage password from a file instead of prompting securely.
+    #[arg(long, value_name = "PATH", requires = "photo")]
+    password_file: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -196,6 +223,35 @@ struct UploadArgs {
     /// Optional shortcut title.
     #[arg(long)]
     title: Option<String>,
+    /// Password-protect the uploaded file.
+    #[arg(long)]
+    protect: bool,
+    /// Read the storage password from a file instead of prompting securely.
+    #[arg(long, value_name = "PATH")]
+    password_file: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct EditArgs {
+    /// Shortcut ID.
+    id: String,
+    /// Change the tail.
+    #[arg(long)]
+    tail: Option<String>,
+    /// Change the destination URL.
+    #[arg(long)]
+    target_url: Option<String>,
+    /// Change the label. Pass an empty value to remove it.
+    #[arg(long)]
+    title: Option<String>,
+    /// Pause or activate the shortcut.
+    #[arg(long, value_name = "BOOL")]
+    active: Option<bool>,
+    /// Saved account email to modify instead of the active account.
+    account: Option<String>,
+    /// Shortcut version. If omitted, suffix looks it up first.
+    #[arg(long)]
+    version: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
@@ -213,18 +269,41 @@ struct PhotoArgs {
     #[arg(
         short = 'l',
         long,
-        conflicts_with = "remote",
-        required_unless_present = "remote"
+        conflicts_with_all = ["remote", "drop"],
+        required_unless_present_any = ["remote", "drop"]
     )]
     local: bool,
     /// Resolve to the original image by default.
     #[arg(
         short = 'r',
         long,
-        conflicts_with = "local",
-        required_unless_present = "local"
+        conflicts_with_all = ["local", "drop"],
+        required_unless_present_any = ["local", "drop"]
     )]
     remote: bool,
+    /// Remove the managed photo and return the shortcut to a normal redirect.
+    #[arg(long, conflicts_with_all = ["local", "remote"])]
+    drop: bool,
+    /// Saved account email to modify instead of the active account.
+    account: Option<String>,
+    /// Shortcut version. If omitted, suffix looks it up first.
+    #[arg(long)]
+    version: Option<u64>,
+}
+
+#[derive(Args)]
+struct PasswordArgs {
+    /// Stored photo or managed-file shortcut ID.
+    id: String,
+    /// Add or change the password.
+    #[arg(long, conflicts_with = "remove", required_unless_present = "remove")]
+    add: bool,
+    /// Remove password protection.
+    #[arg(long, conflicts_with = "add", required_unless_present = "add")]
+    remove: bool,
+    /// Read the new password from a file instead of prompting securely.
+    #[arg(long, value_name = "PATH", requires = "add")]
+    password_file: Option<PathBuf>,
     /// Saved account email to modify instead of the active account.
     account: Option<String>,
     /// Shortcut version. If omitted, suffix looks it up first.
@@ -496,10 +575,13 @@ fn main() -> Result<()> {
                 list_shortcuts(&api, args)
             }
         }
+        Some(Command::Search(args)) => search_shortcuts(args),
         Some(Command::Add(args)) => add(args),
+        Some(Command::Edit(args)) => edit_shortcut(args),
         Some(Command::Upload(args)) => upload_file(args),
         Some(Command::Rm(args)) => remove(args),
         Some(Command::Photo(args)) => configure_photo(args),
+        Some(Command::Password(args)) => configure_password(args),
         Some(Command::Mv(args)) => move_domain(args),
         Some(Command::Transfer(args)) => transfer_code(args),
         Some(Command::Accept(args)) => accept_transfer(args),
@@ -714,12 +796,164 @@ fn add(args: AddArgs) -> Result<()> {
         args.photo,
         args.photo_mode,
     );
+    apply_storage_password(
+        &mut payload,
+        args.protect || args.password_file.is_some(),
+        args.password_file.as_deref(),
+    )?;
     match shortcut.domain {
         ShortcutAddDomain::Hostname(hostname) => payload["domain"] = json!(hostname),
         ShortcutAddDomain::Id(domain_id) => payload["domainId"] = json!(domain_id),
         ShortcutAddDomain::Default => payload["domainId"] = json!(api.default_domain_id()?),
     }
+    let shortcuts = api.shortcuts_payload()?;
+    if let Some(existing) = occupied_tail(&shortcuts, &payload) {
+        let short = shortcut_name(existing);
+        eprintln!("Tail already taken: {short}");
+        let edit = args.edit_existing
+            || (io::stdin().is_terminal()
+                && confirm("Edit that shortcut to use the new target?", false)?);
+        if !edit {
+            bail!("tail is already taken; rerun with --edit-existing to update it");
+        }
+        payload["id"] = existing.get("id").cloned().unwrap_or(Value::Null);
+        payload["version"] = existing.get("version").cloned().unwrap_or(Value::Null);
+        payload["isActive"] = existing.get("isActive").cloned().unwrap_or(json!(true));
+        return api.patch("shortcuts", payload);
+    }
+    let duplicates = shortcuts
+        .iter()
+        .filter(|existing| {
+            same_target(
+                existing
+                    .get("targetUrl")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                payload
+                    .get("targetUrl")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            )
+        })
+        .collect::<Vec<_>>();
+    if !duplicates.is_empty() && !args.allow_duplicate_target {
+        eprintln!(
+            "That target already has {} shortcut{}:",
+            duplicates.len(),
+            if duplicates.len() == 1 { "" } else { "s" }
+        );
+        for (index, existing) in duplicates.iter().enumerate() {
+            eprintln!(
+                "  {}. {}\t{}",
+                index + 1,
+                shortcut_name(existing),
+                existing
+                    .get("targetUrl")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            );
+        }
+        if !io::stdin().is_terminal() {
+            bail!("reuse an existing shortcut or rerun with --allow-duplicate-target");
+        }
+        if confirm("Reuse the first existing shortcut?", true)? {
+            println!(
+                "{}\t{}",
+                shortcut_name(duplicates[0]),
+                duplicates[0]
+                    .get("targetUrl")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            );
+            return Ok(());
+        }
+        if !confirm("Create another shortcut for the same target?", false)? {
+            bail!("shortcut creation canceled");
+        }
+    }
     api.post("shortcuts", payload)
+}
+
+fn search_shortcuts(args: SearchArgs) -> Result<()> {
+    let expression = RegexBuilder::new(&args.pattern)
+        .case_insensitive(true)
+        .build()
+        .with_context(|| format!("invalid regular expression: {}", args.pattern))?;
+    let config = load_config()?;
+    let api = api_for_account(&config, args.account.as_deref())?;
+    let shortcuts = api.shortcuts_payload()?;
+    for shortcut in shortcuts {
+        let short = shortcut_name(&shortcut);
+        let target = shortcut
+            .get("targetUrl")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let short_match = expression.is_match(&short);
+        let target_match = expression.is_match(target);
+        if short_match || target_match {
+            let scope = match (short_match, target_match) {
+                (true, true) => "shortcut+target",
+                (true, false) => "shortcut",
+                (false, true) => "target",
+                _ => unreachable!(),
+            };
+            println!("{scope}\t{short}\t{target}");
+        }
+    }
+    Ok(())
+}
+
+fn occupied_tail<'a>(shortcuts: &'a [Value], payload: &Value) -> Option<&'a Value> {
+    let tail = payload.get("tail").and_then(Value::as_str)?;
+    shortcuts.iter().find(|existing| {
+        if !existing
+            .get("tail")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case(tail))
+        {
+            return false;
+        }
+        if let Some(domain_id) = payload.get("domainId").and_then(Value::as_str) {
+            return existing.get("domainId").and_then(Value::as_str) == Some(domain_id);
+        }
+        payload
+            .get("domain")
+            .and_then(Value::as_str)
+            .is_some_and(|hostname| {
+                existing
+                    .get("hostname")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(hostname))
+            })
+    })
+}
+
+fn shortcut_name(value: &Value) -> String {
+    format!(
+        "{}/{}",
+        value.get("hostname").and_then(Value::as_str).unwrap_or("?"),
+        value.get("tail").and_then(Value::as_str).unwrap_or("?")
+    )
+}
+
+fn same_target(left: &str, right: &str) -> bool {
+    match (Url::parse(left), Url::parse(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left.trim() == right.trim(),
+    }
+}
+
+fn confirm(prompt: &str, default: bool) -> Result<bool> {
+    eprint!("{prompt} {} ", if default { "[Y/n]" } else { "[y/N]" });
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(true),
+        "n" | "no" => Ok(false),
+        "" => Ok(default),
+        _ => bail!("answer yes or no"),
+    }
 }
 
 fn shortcut_payload(mut payload: Value, photo: bool, photo_mode: PhotoMode) -> Value {
@@ -728,6 +962,32 @@ fn shortcut_payload(mut payload: Value, photo: bool, photo_mode: PhotoMode) -> V
         payload["photoMode"] = json!(photo_mode);
     }
     payload
+}
+
+fn apply_storage_password(
+    payload: &mut Value,
+    protect: bool,
+    password_file: Option<&Path>,
+) -> Result<()> {
+    if !protect {
+        return Ok(());
+    }
+    let password = if let Some(path) = password_file {
+        fs::read_to_string(path)
+            .with_context(|| format!("could not read password file {}", path.display()))?
+            .trim_end_matches(['\r', '\n'])
+            .to_owned()
+    } else if io::stdin().is_terminal() {
+        rpassword::prompt_password("Storage password: ")?
+    } else {
+        bail!("--protect requires an interactive terminal or --password-file PATH");
+    };
+    if !(8..=128).contains(&password.chars().count()) {
+        bail!("storage password must be between 8 and 128 characters");
+    }
+    payload["protectStorage"] = json!(true);
+    payload["storagePassword"] = json!(password);
+    Ok(())
 }
 
 fn upload_file(args: UploadArgs) -> Result<()> {
@@ -805,6 +1065,11 @@ fn upload_file(args: UploadArgs) -> Result<()> {
         "fileName": file_name,
         "title": args.title,
     });
+    apply_storage_password(
+        &mut payload,
+        args.protect || args.password_file.is_some(),
+        args.password_file.as_deref(),
+    )?;
     match domain {
         ShortcutAddDomain::Hostname(hostname) => payload["domain"] = json!(hostname),
         ShortcutAddDomain::Id(domain_id) => payload["domainId"] = json!(domain_id),
@@ -909,6 +1174,12 @@ fn configure_photo(args: PhotoArgs) -> Result<()> {
         Some(value) => value,
         None => api.shortcut_version(&args.id)?,
     };
+    if args.drop {
+        return api.patch(
+            "shortcuts",
+            json!({ "id": args.id, "version": version, "storePhoto": false, "serveLocalPhoto": false, "preservePhotoPage": false, "protectStorage": false }),
+        );
+    }
     let mode = if args.local {
         PhotoMode::Local
     } else {
@@ -918,6 +1189,44 @@ fn configure_photo(args: PhotoArgs) -> Result<()> {
         "shortcuts",
         json!({ "id": args.id, "version": version, "type": "photo", "photoMode": mode }),
     )
+}
+
+fn edit_shortcut(args: EditArgs) -> Result<()> {
+    if args.tail.is_none()
+        && args.target_url.is_none()
+        && args.title.is_none()
+        && args.active.is_none()
+    {
+        bail!("specify at least one of --tail, --target-url, --title, or --active");
+    }
+    let config = load_config()?;
+    let api = api_for_account(&config, args.account.as_deref())?;
+    let version = args.version.unwrap_or(api.shortcut_version(&args.id)?);
+    let mut payload = json!({ "id": args.id, "version": version });
+    if let Some(value) = args.tail {
+        payload["tail"] = json!(value);
+    }
+    if let Some(value) = args.target_url {
+        payload["targetUrl"] = json!(value);
+    }
+    if let Some(value) = args.title {
+        payload["title"] = json!(value);
+    }
+    if let Some(value) = args.active {
+        payload["isActive"] = json!(value);
+    }
+    api.patch("shortcuts", payload)
+}
+
+fn configure_password(args: PasswordArgs) -> Result<()> {
+    let config = load_config()?;
+    let api = api_for_account(&config, args.account.as_deref())?;
+    let version = args.version.unwrap_or(api.shortcut_version(&args.id)?);
+    let mut payload = json!({ "id": args.id, "version": version, "protectStorage": args.add });
+    if args.add {
+        apply_storage_password(&mut payload, true, args.password_file.as_deref())?;
+    }
+    api.patch("shortcuts", payload)
 }
 
 fn logout(account: &str) -> Result<()> {
@@ -1509,6 +1818,15 @@ impl Api {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| anyhow!("no owned domain was available to identify the Suffix account"))
+    }
+
+    fn shortcuts_payload(&self) -> Result<Vec<Value>> {
+        let payload = self.request_json(self.client.get(self.url("shortcuts")?))?;
+        payload
+            .get("shortcuts")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| anyhow!("suffix.org did not return a shortcut list"))
     }
 
     fn shortcut_version(&self, id: &str) -> Result<u64> {
@@ -2478,12 +2796,17 @@ mod tests {
             "--photo",
             "--photo-mode",
             "local",
+            "--protect",
+            "--password-file",
+            "./secret.txt",
         ])
         .unwrap();
         match cli.command {
             Some(Command::Add(args)) => {
                 assert!(args.photo);
                 assert_eq!(args.photo_mode, PhotoMode::Local);
+                assert!(args.protect);
+                assert_eq!(args.password_file, Some(PathBuf::from("./secret.txt")));
                 let payload = shortcut_payload(json!({}), args.photo, args.photo_mode);
                 assert_eq!(payload, json!({ "type": "photo", "photoMode": "local" }));
             }
@@ -2502,6 +2825,39 @@ mod tests {
         }
 
         assert!(Cli::try_parse_from(["suffix", "photo", "shortcut-1", "-l", "-r"]).is_err());
+
+        let cli = Cli::try_parse_from(["suffix", "photo", "shortcut-1", "--drop"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Photo(PhotoArgs { drop: true, .. }))
+        ));
+
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "password",
+            "shortcut-1",
+            "--add",
+            "--password-file",
+            "./secret.txt",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Password(PasswordArgs { add: true, .. }))
+        ));
+
+        let cli = Cli::try_parse_from(["suffix", "password", "shortcut-1", "--remove"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Password(PasswordArgs { remove: true, .. }))
+        ));
+
+        let cli =
+            Cli::try_parse_from(["suffix", "edit", "shortcut-1", "--tail", "new-tail"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Edit(EditArgs { tail: Some(_), .. }))
+        ));
     }
 
     #[test]
@@ -2838,12 +3194,16 @@ mod tests {
             "./Board Notes.pdf",
             "--title",
             "Board report",
+            "--protect",
+            "--password-file",
+            "./secret.txt",
         ])
         .unwrap();
         match cli.command {
             Some(Command::Upload(args)) => {
                 assert_eq!(args.value, "files.example/report");
                 assert_eq!(args.file, PathBuf::from("./Board Notes.pdf"));
+                assert!(args.protect);
                 let (domain, tail) = upload_locator(&args).unwrap();
                 assert!(
                     matches!(domain, ShortcutAddDomain::Hostname(value) if value == "files.example")
@@ -2855,5 +3215,44 @@ mod tests {
         assert_eq!(safe_upload_name("../secret\0.txt"), ".._secret_.txt");
         assert_eq!(file_content_type("report.pdf"), "application/pdf");
         assert_eq!(random_uuid().len(), 36);
+    }
+
+    #[test]
+    fn search_and_creation_conflict_helpers_cover_both_fields() {
+        let cli = Cli::try_parse_from(["suffix", "search", "foto\\.gs|report.*pdf"]).unwrap();
+        assert!(
+            matches!(cli.command, Some(Command::Search(SearchArgs { pattern, .. })) if pattern == "foto\\.gs|report.*pdf")
+        );
+
+        let shortcuts = vec![json!({
+            "id": "link-1", "version": 2, "domainId": "domain-1",
+            "hostname": "go.example", "tail": "report", "targetUrl": "https://files.example/report.pdf"
+        })];
+        let occupied = occupied_tail(
+            &shortcuts,
+            &json!({ "domainId": "domain-1", "tail": "report" }),
+        )
+        .unwrap();
+        assert_eq!(shortcut_name(occupied), "go.example/report");
+        assert!(same_target(
+            "https://files.example",
+            "https://files.example/"
+        ));
+
+        let add = Cli::try_parse_from([
+            "suffix",
+            "add",
+            "go.example/new",
+            "https://files.example/report.pdf",
+            "--allow-duplicate-target",
+        ])
+        .unwrap();
+        assert!(matches!(
+            add.command,
+            Some(Command::Add(AddArgs {
+                allow_duplicate_target: true,
+                ..
+            }))
+        ));
     }
 }
