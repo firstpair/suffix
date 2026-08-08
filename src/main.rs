@@ -172,6 +172,18 @@ struct AddArgs {
     /// Shortcut domain hostname. Example: `suffix add -d pair.rs typesec URL`.
     #[arg(short = 'd', long = "domain", value_name = "HOST")]
     domain: Option<String>,
+    /// Use the public suf.cx domain. With no tail, choose from generated candidates.
+    #[arg(long, conflicts_with_all = ["domain", "domain_id"])]
+    public: bool,
+    /// Include shortest letter-only candidates for --public.
+    #[arg(long, requires = "public")]
+    letters: bool,
+    /// Include shortest letter-and-number candidates for --public.
+    #[arg(long, requires = "public")]
+    alphanumeric: bool,
+    /// Include short dash-separated word candidates for --public.
+    #[arg(long, requires = "public")]
+    words: bool,
     /// Target URL, or `HOST/TAIL` when the target URL is passed next.
     value: String,
     /// Shortcut tail, or target URL when VALUE is `HOST/TAIL`.
@@ -786,7 +798,10 @@ fn login(args: LoginArgs) -> Result<()> {
 fn add(args: AddArgs) -> Result<()> {
     let config = load_config()?;
     let api = api_for_account(&config, add_account(&args))?;
-    let shortcut = shortcut_add_fields(&args)?;
+    let mut shortcut = shortcut_add_fields(&args)?;
+    if args.public && shortcut.tail.is_empty() {
+        shortcut.tail = select_public_tail(&api, &args)?;
+    }
     let mut payload = shortcut_payload(
         json!({
             "tail": shortcut.tail,
@@ -1263,6 +1278,25 @@ fn shortcut_add_fields(args: &AddArgs) -> Result<ShortcutAddFields> {
     if args.domain.is_some() && args.domain_id.is_some() {
         bail!("pass either -d/--domain or --domain-id, not both");
     }
+    if args.public {
+        if let Some(target_url) = args.tail.as_deref().filter(|value| looks_like_url(value)) {
+            return Ok(ShortcutAddFields {
+                domain: ShortcutAddDomain::Hostname("suf.cx".to_string()),
+                tail: args.value.clone(),
+                target_url: target_url.to_string(),
+            });
+        }
+        if !looks_like_url(&args.value) {
+            bail!(
+                "usage: suffix add --public [--letters] [--alphanumeric] [--words] URL, or suffix add --public TAIL URL"
+            );
+        }
+        return Ok(ShortcutAddFields {
+            domain: ShortcutAddDomain::Hostname("suf.cx".to_string()),
+            tail: String::new(),
+            target_url: args.value.clone(),
+        });
+    }
     if let Some(hostname) = args.domain.as_deref() {
         let target_url = args
             .target_url
@@ -1306,6 +1340,65 @@ fn shortcut_add_fields(args: &AddArgs) -> Result<ShortcutAddFields> {
             .unwrap_or_else(|| derive_tail(&args.value)),
         target_url: args.value.clone(),
     })
+}
+
+fn select_public_tail(api: &Api, args: &AddArgs) -> Result<String> {
+    let mut styles = Vec::new();
+    if args.letters || (!args.alphanumeric && !args.words) {
+        styles.push("letters");
+    }
+    if args.alphanumeric {
+        styles.push("alphanumeric");
+    }
+    if args.words {
+        styles.push("words");
+    }
+    let payload = api.request_json(
+        api.client
+            .get(api.url(&format!("candidates?styles={}", styles.join(",")))?),
+    )?;
+    let groups = payload
+        .get("candidates")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("suffix.org did not return public suffix candidates"))?;
+    let candidates = styles
+        .iter()
+        .flat_map(|style| {
+            groups
+                .get(*style)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        bail!("suffix.org did not find an available suf.cx suffix");
+    }
+    if !io::stdin().is_terminal() {
+        return Ok(candidates[0].clone());
+    }
+    eprintln!("Available suf.cx suffixes:");
+    for (index, candidate) in candidates.iter().enumerate() {
+        eprintln!("  {}. {}", index + 1, candidate);
+    }
+    eprint!("Choose [1]: ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let choice = if answer.trim().is_empty() {
+        1
+    } else {
+        answer
+            .trim()
+            .parse::<usize>()
+            .context("enter a candidate number")?
+    };
+    candidates
+        .get(choice.saturating_sub(1))
+        .cloned()
+        .ok_or_else(|| anyhow!("candidate number is out of range"))
 }
 
 fn add_account(args: &AddArgs) -> Option<&str> {
@@ -1854,6 +1947,7 @@ fn route_resource(resource: &str) -> Result<&'static str> {
         "transfers" => Ok("transfers"),
         "stats" => Ok("stats"),
         "files" => Ok("files"),
+        "candidates" => Ok("candidates"),
         _ => bail!("unsupported API resource {name}"),
     }
 }
@@ -2784,6 +2878,50 @@ mod tests {
             }
             _ => panic!("expected rm command"),
         }
+    }
+
+    #[test]
+    fn public_shortcut_commands_support_generated_and_custom_tails() {
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "add",
+            "--public",
+            "--letters",
+            "--words",
+            "https://example.com/launch",
+        ])
+        .unwrap();
+        let Some(Command::Add(args)) = cli.command else {
+            panic!("expected add command")
+        };
+        assert!(args.public && args.letters && args.words);
+        assert_eq!(
+            shortcut_add_fields(&args).unwrap(),
+            ShortcutAddFields {
+                domain: ShortcutAddDomain::Hostname("suf.cx".to_string()),
+                tail: String::new(),
+                target_url: "https://example.com/launch".to_string(),
+            }
+        );
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "add",
+            "--public",
+            "dog-cat",
+            "https://example.com/launch",
+        ])
+        .unwrap();
+        let Some(Command::Add(args)) = cli.command else {
+            panic!("expected add command")
+        };
+        assert_eq!(
+            shortcut_add_fields(&args).unwrap(),
+            ShortcutAddFields {
+                domain: ShortcutAddDomain::Hostname("suf.cx".to_string()),
+                tail: "dog-cat".to_string(),
+                target_url: "https://example.com/launch".to_string(),
+            }
+        );
     }
 
     #[test]

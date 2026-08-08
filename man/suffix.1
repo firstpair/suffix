@@ -1,4 +1,4 @@
-.TH SUFFIX 1 2026-08-03 "Suffix 0.1.4" "User Commands"
+.TH SUFFIX 1 2026-08-07 "Suffix 0.1.5" "User Commands"
 .SH NAME
 suffix \- manage durable short links on domains you own
 .SH SYNOPSIS
@@ -61,6 +61,19 @@ target or edit an occupied tail. Scripts must opt in with
 .B --allow-duplicate-target
 or
 .B --edit-existing.
+.PP
+Every account can use the public
+.B suf.cx
+base without attaching a domain. Use
+.B suffix add --public URL
+to choose a shortest available candidate. Combine
+.BR --letters ,
+.BR --alphanumeric ,
+and
+.BR --words
+to select candidate styles, or use
+.B suffix add --public TAIL URL
+to request a custom tail.
 .TP
 .B edit \fIshortcut-id\fR [--tail \fItail\fR] [--target-url \fIurl\fR] [--title \fIlabel\fR] [--active \fIbool\fR]
 Edit selected shortcut fields. If no version is supplied, Suffix reads it first.

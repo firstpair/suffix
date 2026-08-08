@@ -54,6 +54,9 @@ suffix add pair.rs/typesec https://github.com/querygraph/typesec
 suffix add -d pair.rs typesec https://github.com/querygraph/typesec
 suffix add https://example.com launch --domain-id <uuid>
 suffix add foto.gs/sunset https://example.com/sunset.jpg --photo --photo-mode local
+suffix add --public https://example.com/launch
+suffix add --public --letters --alphanumeric --words https://example.com/launch
+suffix add --public my-tail https://example.com/launch
 suffix photo <shortcut-id> -r
 suffix photo <shortcut-id> --drop
 suffix edit <shortcut-id> --tail new-tail --target-url https://example.com/new
@@ -112,6 +115,8 @@ managed object. Both commands discover the current version unless one is supplie
 `suffix search REGEXP [EMAIL]` searches both `hostname/tail` and destination URL. Its first tab-separated column reports `shortcut`, `target`, or `shortcut+target` to show why each row matched.
 
 Before `suffix add` creates a shortcut, it checks the current inventory. An occupied tail offers to edit the existing shortcut; an existing target offers to reuse its old shortcut or confirm creating another. Interactive terminals prompt for the choice. Automation uses `--edit-existing` or `--allow-duplicate-target` explicitly and otherwise fails closed.
+
+Every account can use the shared `suf.cx` base without attaching a domain. `suffix add --public URL` requests the shortest available letter-only candidates and prompts for a choice. Add any combination of `--letters`, `--alphanumeric`, and `--words` to combine candidate styles; in a non-interactive pipeline the first available candidate is used. `suffix add --public TAIL URL` requests a custom tail directly, with final availability enforced atomically by Suffix.
 
 `suffix transfer DOMAIN --to EMAIL` creates a short-lived code for moving a domain out of the active account. The receiving account signs in separately and runs `suffix accept CODE`, or pastes the code into the Suffix dashboard. `--to` is optional but recommended because it pins acceptance to that email address.
 
