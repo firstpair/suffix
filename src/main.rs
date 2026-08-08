@@ -1036,7 +1036,11 @@ fn upload_file(args: UploadArgs) -> Result<()> {
     );
     let token = api.request_json(api.client.post(api.url("files")?).json(&json!({
         "type": "blob.generate-client-token",
-        "payload": { "pathname": pathname, "multipart": false, "clientPayload": null }
+        "payload": {
+            "pathname": pathname,
+            "multipart": false,
+            "clientPayload": json!({ "size": metadata.len() }).to_string()
+        }
     })))?;
     let client_token = token
         .get("clientToken")
@@ -1054,7 +1058,7 @@ fn upload_file(args: UploadArgs) -> Result<()> {
         .query(&[("pathname", pathname.as_str())])
         .bearer_auth(client_token)
         .header("x-api-version", "12")
-        .header("x-vercel-blob-access", "public")
+        .header("x-vercel-blob-access", "private")
         .header("x-content-type", content_type)
         .header("content-type", content_type)
         .body(bytes)
@@ -1163,9 +1167,10 @@ fn file_content_type(name: &str) -> &'static str {
         "png" => "image/png",
         "gif" => "image/gif",
         "webp" => "image/webp",
-        "zip" => "application/zip",
-        "mp4" => "video/mp4",
-        "mp3" => "audio/mpeg",
+        "avif" => "image/avif",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         _ => "application/octet-stream",
     }
 }
@@ -1887,7 +1892,7 @@ impl Api {
             .ok_or_else(|| anyhow!("suffix.org did not return a domain list"))?;
         if domains.is_empty() {
             bail!(
-                "no domains found for {}; add one with `suffix add --domain HOST` or pass --domain-id",
+                "no domains found for {}; use `suffix add --public URL` for a public suf.cx link, or add one with `suffix add --domain HOST`",
                 self.account
             )
         }
