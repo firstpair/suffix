@@ -1881,7 +1881,7 @@ impl Api {
     }
 
     fn request_json(&self, request: reqwest::blocking::RequestBuilder) -> Result<Value> {
-        verdun_cli::authenticated_json(request, &self.key)
+        somme_cli::authenticated_json(request, &self.key)
     }
 
     fn default_domain_id(&self) -> Result<String> {
@@ -1959,16 +1959,16 @@ fn route_resource(resource: &str) -> Result<&'static str> {
 
 fn load_config() -> Result<Config> {
     let path = config_path()?;
-    let mut config: Config = verdun_cli::read_toml(&path)?;
+    let mut config: Config = somme_cli::read_toml(&path)?;
     if discard_legacy_profiles(&mut config) {
-        verdun_cli::write_toml(&path, &config)?;
+        somme_cli::write_toml(&path, &config)?;
     }
     Ok(config)
 }
 
 fn save_config(config: &Config) -> Result<()> {
     let path = config_path()?;
-    verdun_cli::write_toml(&path, config)
+    somme_cli::write_toml(&path, config)
 }
 
 fn print_config() -> Result<()> {
@@ -1999,7 +1999,7 @@ fn print_config() -> Result<()> {
 }
 
 fn config_path() -> Result<PathBuf> {
-    verdun_cli::config_path("suffix")
+    somme_cli::config_path("suffix")
 }
 
 fn random_state() -> String {
@@ -2618,8 +2618,10 @@ mod tests {
 
     #[test]
     fn move_uses_the_active_account_when_one_other_account_is_given() {
-        let mut config = Config::default();
-        config.active_account = Some("personal@example.com".to_string());
+        let mut config = Config {
+            active_account: Some("personal@example.com".to_string()),
+            ..Config::default()
+        };
         for email in ["personal@example.com", "work@example.com"] {
             config.accounts.insert(
                 email.to_string(),

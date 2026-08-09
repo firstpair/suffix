@@ -12,9 +12,9 @@ Seed the CLI with a browser login:
 suffix login person@example.com
 ```
 
-The CLI opens `suffix.org`, starts a loopback callback on `127.0.0.1`, and waits. Passing an email selects a saved profile for that email, or creates a separate profile named after it. Once a profile has a key, repeating `suffix login EMAIL` reuses that local key and switches to the profile without opening the browser. Use `suffix login EMAIL --renew` only when you intentionally want to replace the key. A new browser approval creates a one-time API key and redirects it to the local listener; the key is then stored in your platform config directory under `suffix/config.toml`. Token persistence and authenticated JSON requests use the public `verdun-cli` base crate; Suffix keeps its domain, shortcut, and transfer routes product-specific.
+The CLI opens `suffix.org`, starts a loopback callback on `127.0.0.1`, and waits. Passing an email selects a saved profile for that email, or creates a separate profile named after it. Once a profile has a key, repeating `suffix login EMAIL` reuses that local key and switches to the profile without opening the browser. Use `suffix login EMAIL --renew` only when you intentionally want to replace the key. A new browser approval creates a one-time API key and redirects it to the local listener; the key is then stored in your platform config directory under `suffix/config.toml`. Token persistence and authenticated JSON requests use the public `somme-cli` base crate; Suffix keeps its domain, shortcut, and transfer routes product-specific.
 
-Suffix depends on the published `verdun-cli = "=0.1.0"` crate, never a sibling checkout. Cargo records that resolved version in `Cargo.lock`, so a Verdun regression cannot alter an existing Suffix build. Update the dependency only as an intentional, separately validated change. Old unnamed `default` profiles are discarded; sign in again with each account's email.
+Suffix pins an immutable QueryGraph Somme revision, never a sibling checkout. Cargo records that revision in `Cargo.lock`, so a Somme regression cannot alter an existing Suffix build. Update the dependency only as an intentional, separately validated change. Old unnamed `default` profiles are discarded; sign in again with each account's email.
 
 Store several accounts by email or by an explicit profile name:
 

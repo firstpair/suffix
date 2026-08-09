@@ -28,4 +28,4 @@ serde_json = "1.0"
 toml = "1.1"
 url = "2.5"
 urlencoding = "2.1"
-verdun-cli = "=0.1.0"
+somme-cli = { git = "https://github.com/querygraph/somme", rev = "e9640b129f49e0cd2de1e911df7cd8115d17a22b" }
