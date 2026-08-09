@@ -77,11 +77,13 @@ enum Command {
 #[derive(Args)]
 struct ManArgs {
     #[command(subcommand)]
-    command: ManCommand,
+    command: Option<ManCommand>,
 }
 
 #[derive(Subcommand)]
 enum ManCommand {
+    /// Print the complete embedded manual.
+    Show,
     /// Install suffix(1) into a standard writable man1 directory.
     Install(ManInstallArgs),
 }
@@ -89,7 +91,7 @@ enum ManCommand {
 #[derive(Args)]
 struct ManInstallArgs {
     /// Specific man1 directory to install into.
-    #[arg(long, value_name = "DIR")]
+    #[arg(short = 'd', long, value_name = "DIR")]
     dir: Option<PathBuf>,
 }
 
@@ -98,25 +100,25 @@ struct LoginArgs {
     /// Email address to select or create a saved account profile for.
     login_email: Option<String>,
     /// Suffix dashboard URL to open.
-    #[arg(long, default_value = DEFAULT_APP_URL)]
+    #[arg(short = 'u', long, default_value = DEFAULT_APP_URL)]
     app_url: String,
     /// Email address to hint in the browser sign-in flow.
-    #[arg(long)]
+    #[arg(short = 'e', long)]
     email: Option<String>,
     /// Local profile name to save this key under.
-    #[arg(long)]
+    #[arg(short = 'a', long)]
     account: Option<String>,
     /// API key name shown in the Suffix dashboard.
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     name: Option<String>,
     /// Mint and replace the saved key instead of reusing a matching local key.
-    #[arg(long)]
+    #[arg(short = 'r', long)]
     renew: bool,
     /// Print the login URL instead of opening the browser.
-    #[arg(long)]
+    #[arg(short = 'o', long)]
     no_open: bool,
     /// Seconds to wait for browser approval.
-    #[arg(long, default_value_t = 120)]
+    #[arg(short = 't', long, default_value_t = 120)]
     timeout: u64,
 }
 
@@ -125,16 +127,16 @@ struct ListArgs {
     /// Saved account email to query instead of the active account.
     account: Option<String>,
     /// List domains instead of shortcuts. Prefer `suffix domain ls`.
-    #[arg(long, hide = true)]
+    #[arg(short = 'd', long, hide = true)]
     domains: bool,
     /// Emit formatted JSON.
-    #[arg(long)]
+    #[arg(short = 'j', long)]
     json: bool,
     /// Emit formatted XML.
-    #[arg(long)]
+    #[arg(short = 'x', long)]
     xml: bool,
     /// Emit formatted YAML.
-    #[arg(long)]
+    #[arg(short = 'y', long)]
     yaml: bool,
     /// Include visit counts after the target.
     #[arg(short = 'l', long = "stats")]
@@ -154,13 +156,13 @@ struct DomainListArgs {
     /// Saved account email to query instead of the active account.
     account: Option<String>,
     /// Emit formatted JSON.
-    #[arg(long)]
+    #[arg(short = 'j', long)]
     json: bool,
     /// Emit formatted XML.
-    #[arg(long)]
+    #[arg(short = 'x', long)]
     xml: bool,
     /// Emit formatted YAML.
-    #[arg(long)]
+    #[arg(short = 'y', long)]
     yaml: bool,
     /// Include aggregate visit counts for shortcuts on each domain.
     #[arg(short = 'l', long = "stats")]
@@ -173,16 +175,16 @@ struct AddArgs {
     #[arg(short = 'd', long = "domain", value_name = "HOST")]
     domain: Option<String>,
     /// Use the public suf.cx domain. With no tail, choose from generated candidates.
-    #[arg(long, conflicts_with_all = ["domain", "domain_id"])]
+    #[arg(short = 'p', long, conflicts_with_all = ["domain", "domain_id"])]
     public: bool,
     /// Include shortest letter-only candidates for --public.
-    #[arg(long, requires = "public")]
+    #[arg(short = 'l', long, requires = "public")]
     letters: bool,
     /// Include shortest letter-and-number candidates for --public.
-    #[arg(long, requires = "public")]
+    #[arg(short = 'a', long, requires = "public")]
     alphanumeric: bool,
     /// Include short dash-separated word candidates for --public.
-    #[arg(long, requires = "public")]
+    #[arg(short = 'w', long, requires = "public")]
     words: bool,
     /// Target URL, or `HOST/TAIL` when the target URL is passed next.
     value: String,
@@ -193,28 +195,28 @@ struct AddArgs {
     /// Saved account email to modify instead of the active account.
     account: Option<String>,
     /// Domain ID for a new shortcut. Defaults to the first owned domain.
-    #[arg(long)]
+    #[arg(short = 'i', long)]
     domain_id: Option<String>,
     /// Optional shortcut title.
-    #[arg(long)]
+    #[arg(short = 't', long)]
     title: Option<String>,
     /// Create a top-tier Photo shortcut instead of a redirect.
-    #[arg(long)]
+    #[arg(short = 'P', long)]
     photo: bool,
     /// Default Photo source. Local stores and serves a managed copy; remote uses the original.
-    #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
+    #[arg(short = 'm', long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
     photo_mode: PhotoMode,
     /// Create another shortcut even when this target already has one.
-    #[arg(long)]
+    #[arg(short = 'D', long)]
     allow_duplicate_target: bool,
     /// Replace an occupied tail's destination instead of failing.
-    #[arg(long)]
+    #[arg(short = 'e', long)]
     edit_existing: bool,
     /// Password-protect the stored photo. The remote target remains public.
-    #[arg(long, requires = "photo")]
+    #[arg(short = 'r', long, requires = "photo")]
     protect: bool,
     /// Read the storage password from a file instead of prompting securely.
-    #[arg(long, value_name = "PATH", requires = "photo")]
+    #[arg(short = 'f', long, value_name = "PATH", requires = "photo")]
     password_file: Option<PathBuf>,
 }
 
@@ -230,16 +232,16 @@ struct UploadArgs {
     /// Saved account email to modify instead of the active account.
     account: Option<String>,
     /// Domain ID. Defaults to the first owned domain when no hostname is supplied.
-    #[arg(long)]
+    #[arg(short = 'i', long)]
     domain_id: Option<String>,
     /// Optional shortcut title.
-    #[arg(long)]
+    #[arg(short = 't', long)]
     title: Option<String>,
     /// Password-protect the uploaded file.
-    #[arg(long)]
+    #[arg(short = 'p', long)]
     protect: bool,
     /// Read the storage password from a file instead of prompting securely.
-    #[arg(long, value_name = "PATH")]
+    #[arg(short = 'f', long, value_name = "PATH")]
     password_file: Option<PathBuf>,
 }
 
@@ -248,21 +250,21 @@ struct EditArgs {
     /// Shortcut ID.
     id: String,
     /// Change the tail.
-    #[arg(long)]
+    #[arg(short = 't', long)]
     tail: Option<String>,
     /// Change the destination URL.
-    #[arg(long)]
+    #[arg(short = 'u', long)]
     target_url: Option<String>,
     /// Change the label. Pass an empty value to remove it.
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     title: Option<String>,
     /// Pause or activate the shortcut.
-    #[arg(long, value_name = "BOOL")]
+    #[arg(short = 'a', long, value_name = "BOOL")]
     active: Option<bool>,
     /// Saved account email to modify instead of the active account.
     account: Option<String>,
     /// Shortcut version. If omitted, suffix looks it up first.
-    #[arg(long)]
+    #[arg(short = 'v', long)]
     version: Option<u64>,
 }
 
@@ -294,12 +296,12 @@ struct PhotoArgs {
     )]
     remote: bool,
     /// Remove the managed photo and return the shortcut to a normal redirect.
-    #[arg(long, conflicts_with_all = ["local", "remote"])]
+    #[arg(short = 'd', long, conflicts_with_all = ["local", "remote"])]
     drop: bool,
     /// Saved account email to modify instead of the active account.
     account: Option<String>,
     /// Shortcut version. If omitted, suffix looks it up first.
-    #[arg(long)]
+    #[arg(short = 'v', long)]
     version: Option<u64>,
 }
 
@@ -308,32 +310,42 @@ struct PasswordArgs {
     /// Stored photo or managed-file shortcut ID.
     id: String,
     /// Add or change the password.
-    #[arg(long, conflicts_with = "remove", required_unless_present = "remove")]
+    #[arg(
+        short = 'a',
+        long,
+        conflicts_with = "remove",
+        required_unless_present = "remove"
+    )]
     add: bool,
     /// Remove password protection.
-    #[arg(long, conflicts_with = "add", required_unless_present = "add")]
+    #[arg(
+        short = 'r',
+        long,
+        conflicts_with = "add",
+        required_unless_present = "add"
+    )]
     remove: bool,
     /// Read the new password from a file instead of prompting securely.
-    #[arg(long, value_name = "PATH", requires = "add")]
+    #[arg(short = 'f', long, value_name = "PATH", requires = "add")]
     password_file: Option<PathBuf>,
     /// Saved account email to modify instead of the active account.
     account: Option<String>,
     /// Shortcut version. If omitted, suffix looks it up first.
-    #[arg(long)]
+    #[arg(short = 'v', long)]
     version: Option<u64>,
 }
 
 #[derive(Args)]
 struct RemoveArgs {
     /// Remove a domain instead of a shortcut. Prefer `suffix domain rm ID`.
-    #[arg(long, hide = true)]
+    #[arg(short = 'd', long, hide = true)]
     domain: bool,
     /// Shortcut or domain ID.
     id: String,
     /// Saved account email to modify instead of the active account.
     account: Option<String>,
     /// Shortcut version. If omitted, suffix looks it up first.
-    #[arg(long)]
+    #[arg(short = 'v', long)]
     version: Option<u64>,
 }
 
@@ -346,10 +358,10 @@ struct MoveArgs {
     /// Explicit target account when supplying both source and target accounts.
     target: Option<String>,
     /// Move from the active account to ACCOUNT (the default for one account).
-    #[arg(long, conflicts_with = "from")]
+    #[arg(short = 't', long, conflicts_with = "from")]
     to: bool,
     /// Move from ACCOUNT to the active account.
-    #[arg(long, conflicts_with = "to")]
+    #[arg(short = 'f', long, conflicts_with = "to")]
     from: bool,
     /// Skip the interactive confirmation prompt.
     #[arg(short = 'y', long)]
@@ -364,7 +376,7 @@ struct TransferArgs {
     #[arg(long, short = 't')]
     to: Option<String>,
     /// Minutes before the transfer code expires.
-    #[arg(long, default_value_t = 15)]
+    #[arg(short = 'm', long, default_value_t = 15)]
     minutes: u16,
 }
 
@@ -406,13 +418,13 @@ struct AccountArgs {
     #[arg(short = 'l', long)]
     long: bool,
     /// Email address to cache for `suffix account add NAME --key ...`.
-    #[arg(long)]
+    #[arg(short = 'e', long)]
     email: Option<String>,
     /// API key for `suffix account add NAME --key ...`.
-    #[arg(long)]
+    #[arg(short = 'k', long)]
     key: Option<String>,
     /// API base for `suffix account add NAME --key ...`.
-    #[arg(long, default_value = DEFAULT_API_BASE)]
+    #[arg(short = 'u', long, default_value = DEFAULT_API_BASE)]
     api_base: String,
 }
 
@@ -428,45 +440,45 @@ enum ShortcutCommand {
     List,
     /// Create a shortcut.
     Create {
-        #[arg(long)]
+        #[arg(short = 'd', long)]
         domain_id: String,
-        #[arg(long)]
+        #[arg(short = 't', long)]
         tail: String,
-        #[arg(long)]
+        #[arg(short = 'u', long)]
         target_url: String,
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         title: Option<String>,
-        #[arg(long)]
+        #[arg(short = 'p', long)]
         photo: bool,
-        #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
+        #[arg(short = 'm', long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
         photo_mode: PhotoMode,
     },
     /// Update a shortcut with optimistic concurrency.
     Update {
-        #[arg(long)]
+        #[arg(short = 'i', long)]
         id: String,
-        #[arg(long)]
+        #[arg(short = 'v', long)]
         version: u64,
-        #[arg(long)]
+        #[arg(short = 'd', long)]
         domain_id: String,
-        #[arg(long)]
+        #[arg(short = 't', long)]
         tail: String,
-        #[arg(long)]
+        #[arg(short = 'u', long)]
         target_url: String,
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         title: Option<String>,
-        #[arg(long, default_value_t = true)]
+        #[arg(short = 'a', long, default_value_t = true)]
         active: bool,
-        #[arg(long)]
+        #[arg(short = 'p', long)]
         photo: bool,
-        #[arg(long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
+        #[arg(short = 'm', long, value_enum, default_value_t = PhotoMode::Remote, requires = "photo")]
         photo_mode: PhotoMode,
     },
     /// Delete a shortcut with optimistic concurrency.
     Delete {
-        #[arg(long)]
+        #[arg(short = 'i', long)]
         id: String,
-        #[arg(long)]
+        #[arg(short = 'v', long)]
         version: u64,
     },
 }
@@ -483,12 +495,12 @@ enum DomainCommand {
     List,
     /// Add a domain to the authenticated account.
     Add {
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         hostname: String,
     },
     /// Delete an empty domain.
     Delete {
-        #[arg(long)]
+        #[arg(short = 'i', long)]
         id: String,
     },
 }
@@ -500,7 +512,7 @@ struct StatsArgs {
     /// Saved account email to query instead of the active account.
     account: Option<String>,
     /// UTC day window from 1 through 90.
-    #[arg(long, default_value_t = 30)]
+    #[arg(short = 'd', long, default_value_t = 30)]
     days: u16,
 }
 
@@ -616,7 +628,11 @@ fn main() -> Result<()> {
         },
         Some(Command::Account(args)) => account(args),
         Some(Command::Config) => print_config(),
-        Some(Command::Man(args)) => match args.command {
+        Some(Command::Man(args)) => match args.command.unwrap_or(ManCommand::Show) {
+            ManCommand::Show => {
+                print!("{MANPAGE}");
+                Ok(())
+            }
             ManCommand::Install(args) => install_manpage(args.dir),
         },
         Some(Command::Shortcuts(args)) => {
@@ -2456,56 +2472,9 @@ fn xml_escape(value: &str) -> String {
 }
 
 fn install_manpage(requested_directory: Option<PathBuf>) -> Result<()> {
-    let directories = requested_directory
-        .map(|directory| vec![directory])
-        .unwrap_or_else(default_manpage_directories);
-    let mut failures = Vec::new();
-
-    for directory in directories {
-        match install_manpage_in(&directory) {
-            Ok(destination) => {
-                println!("Installed Suffix manual at {}", destination.display());
-                return Ok(());
-            }
-            Err(error) => failures.push(format!("{}: {error:#}", directory.display())),
-        }
-    }
-
-    bail!(
-        "could not install the Suffix manual. Try `suffix man install --dir ~/.local/share/man/man1`, or run with the required system privileges.\n{}",
-        failures.join("\n")
-    )
-}
-
-fn install_manpage_in(directory: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(directory)
-        .with_context(|| format!("could not create {}", directory.display()))?;
-    let destination = directory.join("suffix.1");
-    fs::write(&destination, MANPAGE)
-        .with_context(|| format!("could not write {}", destination.display()))?;
-    Ok(destination)
-}
-
-fn default_manpage_directories() -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    manpage_directories_for(std::env::consts::OS, &home)
-}
-
-fn manpage_directories_for(platform: &str, home: &Path) -> Vec<PathBuf> {
-    let user_directory = home.join(".local/share/man/man1");
-    if platform == "macos" {
-        vec![
-            PathBuf::from("/opt/homebrew/share/man/man1"),
-            PathBuf::from("/usr/local/share/man/man1"),
-            user_directory,
-        ]
-    } else {
-        vec![
-            PathBuf::from("/usr/local/share/man/man1"),
-            user_directory,
-            PathBuf::from("/usr/share/man/man1"),
-        ]
-    }
+    let destination = somme_cli::install_manpage("suffix", MANPAGE, requested_directory)?;
+    println!("Installed Suffix manual at {}", destination.display());
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2513,24 +2482,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn man_install_uses_standard_platform_directories_and_embeds_the_manual() {
-        assert_eq!(
-            manpage_directories_for("macos", Path::new("/Users/example")),
-            vec![
-                PathBuf::from("/opt/homebrew/share/man/man1"),
-                PathBuf::from("/usr/local/share/man/man1"),
-                PathBuf::from("/Users/example/.local/share/man/man1"),
-            ]
-        );
-        assert_eq!(
-            manpage_directories_for("linux", Path::new("/home/example")),
-            vec![
-                PathBuf::from("/usr/local/share/man/man1"),
-                PathBuf::from("/home/example/.local/share/man/man1"),
-                PathBuf::from("/usr/share/man/man1"),
-            ]
-        );
-        assert!(MANPAGE.contains(".TH SUFFIX 1"));
+    fn embeds_the_complete_manual() {
+        assert!(MANPAGE.contains("SUFFIX"));
+        assert!(MANPAGE.contains("\\-\\-allow\\-duplicate\\-target"));
     }
 
     #[test]
@@ -2539,9 +2493,34 @@ mod tests {
             std::env::temp_dir().join(format!("suffix-man-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
 
-        let destination = install_manpage_in(&directory).unwrap();
+        let destination =
+            somme_cli::install_manpage("suffix", MANPAGE, Some(directory.clone())).unwrap();
         assert_eq!(fs::read_to_string(&destination).unwrap(), MANPAGE);
         fs::remove_dir_all(&directory).unwrap();
+    }
+
+    fn assert_short_and_long(command: &clap::Command) {
+        for argument in command.get_arguments() {
+            if argument.get_long().is_some() {
+                assert!(
+                    argument.get_short().is_some(),
+                    "{} --{} has no short option",
+                    command.get_name(),
+                    argument.get_long().unwrap()
+                );
+            }
+        }
+        for child in command.get_subcommands() {
+            assert_short_and_long(child);
+        }
+    }
+
+    #[test]
+    fn every_long_option_has_a_short_option() {
+        use clap::CommandFactory;
+        let command = Cli::command();
+        command.clone().debug_assert();
+        assert_short_and_long(&command);
     }
 
     #[test]

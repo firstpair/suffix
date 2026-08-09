@@ -16,6 +16,8 @@ The CLI opens `suffix.org`, starts a loopback callback on `127.0.0.1`, and waits
 
 Suffix pins an immutable QueryGraph Somme revision, never a sibling checkout. Cargo records that revision in `Cargo.lock`, so a Somme regression cannot alter an existing Suffix build. Update the dependency only as an intentional, separately validated change. Old unnamed `default` profiles are discarded; sign in again with each account's email.
 
+Every optional argument has paired short and long forms. `CLI-GUIDE.md` is the complete canonical manual; `man/suffix.1` is generated from it. Run `suffix man` to print it or `suffix man install -d DIR` to install it.
+
 Store several accounts by email or by an explicit profile name:
 
 ```sh

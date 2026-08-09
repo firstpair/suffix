@@ -1119,7 +1119,7 @@ dependencies = [
 [[package]]
 name = "somme-cli"
 version = "0.1.0"
-source = "git+https://github.com/querygraph/somme?rev=e9640b129f49e0cd2de1e911df7cd8115d17a22b#e9640b129f49e0cd2de1e911df7cd8115d17a22b"
+source = "git+https://github.com/querygraph/somme?rev=6ab43000f273307c6a2ec6ce1c21130e3a4b403f#6ab43000f273307c6a2ec6ce1c21130e3a4b403f"
 dependencies = [
  "anyhow",
  "chrono",
