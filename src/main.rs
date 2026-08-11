@@ -366,6 +366,9 @@ struct MoveArgs {
     /// Skip the interactive confirmation prompt.
     #[arg(short = 'y', long)]
     yes: bool,
+    /// Validate the move without changing domain ownership.
+    #[arg(short = 'n', long)]
+    dry_run: bool,
 }
 
 #[derive(Args)]
@@ -1518,18 +1521,25 @@ fn move_domain(args: MoveArgs) -> Result<()> {
     })?;
     let from_label = account_display_email(&from_name, from);
     let to_label = account_display_email(&to_name, to);
-    if !args.yes {
+    if !args.yes && !args.dry_run {
         confirm_domain_move(&args.domain, &from_label, &to_label)?;
     }
     let api = Api::from_account(&from_name, from)?;
-    api.patch(
-        "domains",
-        json!({
-            "action": "transfer",
-            "domain": args.domain,
-            "targetApiKey": target_key,
-        }),
-    )
+    let payload = json!({
+        "action": "transfer",
+        "domain": args.domain,
+        "targetApiKey": target_key,
+        "dryRun": args.dry_run,
+    });
+    if args.dry_run {
+        api.request_json(api.client.patch(api.url("domains")?).json(&payload))?;
+        println!(
+            "Dry run passed: {from_label} can move {} to {to_label}.",
+            args.domain
+        );
+        return Ok(());
+    }
+    api.patch("domains", payload)
 }
 
 fn move_account_names(config: &Config, args: &MoveArgs) -> Result<(String, String)> {
@@ -2662,6 +2672,7 @@ mod tests {
             to: false,
             from: false,
             yes: false,
+            dry_run: false,
         };
         assert_eq!(
             move_account_names(&config, &to).unwrap(),
@@ -2679,6 +2690,20 @@ mod tests {
                 "personal@example.com".to_string()
             )
         );
+
+        let cli = Cli::try_parse_from([
+            "suffix",
+            "mv",
+            "bay.news",
+            "--from",
+            "alexy@bythebay.io",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Mv(MoveArgs { dry_run: true, .. }))
+        ));
     }
 
     #[test]

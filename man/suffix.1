@@ -134,7 +134,7 @@ The three mode flags conflict.
 Add, change, or remove password protection on a managed photo or file.
 Without \f[CR]\-\-password\-file\f[R], adding prompts without echo.
 .SS mv
-\f[CR]suffix mv DOMAIN [ACCOUNT] [TARGET] [\-t|\-\-to|\-f|\-\-from] [\-y|\-\-yes]\f[R]
+\f[CR]suffix mv DOMAIN [ACCOUNT] [TARGET] [\-t|\-\-to|\-f|\-\-from] [\-y|\-\-yes] [\-n|\-\-dry\-run]\f[R]
 .PP
 Move a domain between saved accounts.
 The default and \f[CR]\-\-to\f[R] direction move from the active account
@@ -142,6 +142,8 @@ to \f[CR]ACCOUNT\f[R]; \f[CR]\-\-from\f[R] reverses it.
 Supplying \f[CR]TARGET\f[R] explicitly identifies both source and
 destination.
 \f[CR]\-\-yes\f[R] skips confirmation.
+\f[CR]\-\-dry\-run\f[R] proves both accounts and validates recipient
+capacity without changing ownership.
 .SS transfer
 \f[CR]suffix transfer DOMAIN [\-t|\-\-to EMAIL] [\-m|\-\-minutes MINUTES]\f[R]
 .PP

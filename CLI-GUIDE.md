@@ -123,9 +123,9 @@ Add, change, or remove password protection on a managed photo or file. Without `
 
 ## mv
 
-`suffix mv DOMAIN [ACCOUNT] [TARGET] [-t|--to|-f|--from] [-y|--yes]`
+`suffix mv DOMAIN [ACCOUNT] [TARGET] [-t|--to|-f|--from] [-y|--yes] [-n|--dry-run]`
 
-Move a domain between saved accounts. The default and `--to` direction move from the active account to `ACCOUNT`; `--from` reverses it. Supplying `TARGET` explicitly identifies both source and destination. `--yes` skips confirmation.
+Move a domain between saved accounts. The default and `--to` direction move from the active account to `ACCOUNT`; `--from` reverses it. Supplying `TARGET` explicitly identifies both source and destination. `--yes` skips confirmation. `--dry-run` proves both accounts and validates the recipient's capacity without changing ownership.
 
 ## transfer
 

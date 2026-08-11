@@ -82,6 +82,7 @@ suffix mv go.example.com target@example.com
 suffix mv --to go.example.com target@example.com
 suffix mv --from go.example.com owner@example.com
 suffix mv go.example.com owner@example.com target@example.com
+suffix mv --dry-run --from go.example.com owner@example.com
 
 suffix account
 suffix account ls
@@ -122,7 +123,7 @@ Every account can use the shared `suf.cx` base without attaching a domain. `suff
 
 `suffix transfer DOMAIN --to EMAIL` creates a short-lived code for moving a domain out of the active account. The receiving account signs in separately and runs `suffix accept CODE`, or pastes the code into the Suffix dashboard. `--to` is optional but recommended because it pins acceptance to that email address.
 
-`suffix mv DOMAIN TARGET_EMAIL_OR_NAME` moves a domain from the active account to the named target account. `--to` is an optional explicit spelling of that direction. `suffix mv --from DOMAIN SOURCE_EMAIL_OR_NAME` moves from the named source account to the active account. `suffix mv DOMAIN FROM_EMAIL_OR_NAME TO_EMAIL_OR_NAME` remains available when you want both accounts explicit. All forms require both saved keys, prompt for `move DOMAIN` before sending the request, and accept `--yes` only for scripts. The source account signs the request, and the target account's saved key proves the receiving account.
+`suffix mv DOMAIN TARGET_EMAIL_OR_NAME` moves a domain from the active account to the named target account. `--to` is an optional explicit spelling of that direction. `suffix mv --from DOMAIN SOURCE_EMAIL_OR_NAME` moves from the named source account to the active account. `suffix mv DOMAIN FROM_EMAIL_OR_NAME TO_EMAIL_OR_NAME` remains available when you want both accounts explicit. All forms require both saved keys, prompt for `move DOMAIN` before sending the request, and accept `--yes` only for scripts. `--dry-run` proves both accounts and validates recipient capacity without changing ownership. The source account signs the request, and the target account's saved key proves the receiving account.
 
 `suffix account ls` is offline and prints saved account identities with `logged in` or `logged out`; `-l`/`--long` adds cached base URL, domain/link/visit counts, and any cached status fields. `suffix logout EMAIL_OR_NAME` removes the saved API key but keeps the cached account row.
 
