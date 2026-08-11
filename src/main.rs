@@ -1812,24 +1812,52 @@ struct Api {
     base: String,
     key: String,
     account: String,
+    credential: CredentialIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CredentialIdentity {
+    Environment,
+    StoredAccount { email: String },
+    LegacyConfig,
+}
+
+impl CredentialIdentity {
+    fn invalid_key_context(&self) -> String {
+        match self {
+            Self::Environment => "API key from SUFFIX_API_KEY".to_string(),
+            Self::StoredAccount { email } => format!("API key for {email}"),
+            Self::LegacyConfig => "legacy configured API key".to_string(),
+        }
+    }
 }
 
 impl Api {
     fn from_config() -> Result<Self> {
         let config = load_config()?;
+        let active = active_account(&config);
         let base = std::env::var("SUFFIX_API_BASE")
             .ok()
-            .or_else(|| active_account(&config).map(|(_, account)| account.api_base.clone()))
+            .or_else(|| active.map(|(_, account)| account.api_base.clone()))
             .or(config.api_base.clone())
             .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
-        let key = std::env::var("SUFFIX_API_KEY")
-            .ok()
-            .or_else(|| active_account(&config).and_then(|(_, account)| account.api_key.clone()))
-            .or(config.api_key.clone())
-            .ok_or_else(|| {
-                anyhow!("not logged in; run `suffix login --account NAME` or set SUFFIX_API_KEY")
-            })?;
-        let account = active_account(&config)
+        let (key, credential) = if let Ok(key) = std::env::var("SUFFIX_API_KEY") {
+            (key, CredentialIdentity::Environment)
+        } else if let Some((name, account)) = active
+            && let Some(key) = account.api_key.clone()
+        {
+            (
+                key,
+                CredentialIdentity::StoredAccount {
+                    email: account_display_email(name, account),
+                },
+            )
+        } else if let Some(key) = config.api_key.clone() {
+            (key, CredentialIdentity::LegacyConfig)
+        } else {
+            bail!("not logged in; run `suffix login --account NAME` or set SUFFIX_API_KEY")
+        };
+        let account = active
             .map(|(name, _)| name.to_string())
             .unwrap_or_else(|| "env".to_string());
         Ok(Self {
@@ -1840,6 +1868,7 @@ impl Api {
             base: base.trim_end_matches('/').to_string(),
             key,
             account,
+            credential,
         })
     }
 
@@ -1858,6 +1887,9 @@ impl Api {
             base: account.api_base.trim_end_matches('/').to_string(),
             key,
             account: name.to_string(),
+            credential: CredentialIdentity::StoredAccount {
+                email: account_display_email(name, account),
+            },
         })
     }
 
@@ -1897,7 +1929,13 @@ impl Api {
     }
 
     fn request_json(&self, request: reqwest::blocking::RequestBuilder) -> Result<Value> {
-        somme_cli::authenticated_json(request, &self.key)
+        somme_cli::authenticated_json(request, &self.key).map_err(|error| {
+            if error.to_string().contains("api_key_invalid") {
+                anyhow!("{error} ({})", self.credential.invalid_key_context())
+            } else {
+                error
+            }
+        })
     }
 
     fn default_domain_id(&self) -> Result<String> {
@@ -2728,6 +2766,9 @@ mod tests {
             base: "https://suffix.org/api/v1".to_string(),
             key: "secret".to_string(),
             account: "test".to_string(),
+            credential: CredentialIdentity::StoredAccount {
+                email: "test@example.com".to_string(),
+            },
         };
         assert_eq!(
             api.url("shortcuts").unwrap(),
@@ -2736,6 +2777,21 @@ mod tests {
         assert_eq!(
             api.url("shortcuts?id=abc&version=3").unwrap(),
             "https://suffix.org/api/v1?resource=shortcuts&id=abc&version=3"
+        );
+    }
+
+    #[test]
+    fn invalid_key_context_identifies_the_credential_without_exposing_it() {
+        assert_eq!(
+            CredentialIdentity::StoredAccount {
+                email: "person@example.com".to_string(),
+            }
+            .invalid_key_context(),
+            "API key for person@example.com",
+        );
+        assert_eq!(
+            CredentialIdentity::Environment.invalid_key_context(),
+            "API key from SUFFIX_API_KEY",
         );
     }
 
