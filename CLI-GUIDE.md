@@ -227,8 +227,8 @@ Human list output is tab-separated. JSON, XML, and YAML are intended for automat
 
 # FILES
 
-`suffix/config.toml`
-: Named profiles below the platform configuration directory.
+`~/.suffix`
+: Extensible TOML configuration containing named profiles and Suffix settings. A sole profile is selected automatically; multiple profiles use the explicit active account selected by `suffix account use`. Existing platform `suffix/config.toml` configuration is read as a migration fallback until the next save.
 
 # EXAMPLES
 

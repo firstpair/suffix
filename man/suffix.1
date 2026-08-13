@@ -142,8 +142,8 @@ to \f[CR]ACCOUNT\f[R]; \f[CR]\-\-from\f[R] reverses it.
 Supplying \f[CR]TARGET\f[R] explicitly identifies both source and
 destination.
 \f[CR]\-\-yes\f[R] skips confirmation.
-\f[CR]\-\-dry\-run\f[R] proves both accounts and validates recipient
-capacity without changing ownership.
+\f[CR]\-\-dry\-run\f[R] proves both accounts and validates the
+recipient\(cqs capacity without changing ownership.
 .SS transfer
 \f[CR]suffix transfer DOMAIN [\-t|\-\-to EMAIL] [\-m|\-\-minutes MINUTES]\f[R]
 .PP
@@ -252,8 +252,13 @@ Override the saved bearer key.
 Used in the default dashboard key label.
 .SH FILES
 .TP
-\f[CR]suffix/config.toml\f[R]
-Named profiles below the platform configuration directory.
+\f[CR]\(ti/.suffix\f[R]
+Extensible TOML configuration containing named profiles and Suffix
+settings.
+A sole profile is selected automatically; multiple profiles use the
+explicit active account selected by \f[CR]suffix account use\f[R].
+Existing platform \f[CR]suffix/config.toml\f[R] configuration is read as
+a migration fallback until the next save.
 .SH EXAMPLES
 .IP
 .EX

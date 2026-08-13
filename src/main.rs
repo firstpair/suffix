@@ -529,6 +529,8 @@ struct Config {
     active_account: Option<String>,
     #[serde(default)]
     accounts: BTreeMap<String, AccountConfig>,
+    #[serde(flatten)]
+    settings: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -2091,11 +2093,15 @@ fn active_account(config: &Config) -> Option<(&str, &AccountConfig)> {
     {
         return Some((name, account));
     }
-    config
-        .accounts
-        .iter()
-        .next()
-        .map(|(name, account)| (name.as_str(), account))
+    (config.accounts.len() == 1)
+        .then(|| {
+            config
+                .accounts
+                .iter()
+                .next()
+                .map(|(name, account)| (name.as_str(), account))
+        })
+        .flatten()
 }
 
 fn api_for_account(config: &Config, selector: Option<&str>) -> Result<Api> {
@@ -3225,6 +3231,7 @@ mod tests {
             api_key: Some("curtail_sk_old".to_string()),
             active_account: Some("default".to_string()),
             accounts: BTreeMap::new(),
+            settings: BTreeMap::new(),
         };
         config.accounts.insert(
             "default".to_string(),

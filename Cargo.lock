@@ -1119,7 +1119,7 @@ dependencies = [
 [[package]]
 name = "somme-cli"
 version = "0.1.0"
-source = "git+https://github.com/querygraph/somme?rev=6ab43000f273307c6a2ec6ce1c21130e3a4b403f#6ab43000f273307c6a2ec6ce1c21130e3a4b403f"
+source = "git+https://github.com/querygraph/somme?rev=c60ef84a496d709f88403d460fb21a86de4372a0#c60ef84a496d709f88403d460fb21a86de4372a0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1151,7 +1151,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "suffix-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
