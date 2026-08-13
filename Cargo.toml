@@ -1,6 +1,6 @@
 [package]
 name = "suffix-cli"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 description = "Command-line client for suffix.org"
 license = "MIT"
@@ -28,4 +28,4 @@ serde_json = "1.0"
 toml = "1.1"
 url = "2.5"
 urlencoding = "2.1"
-somme-cli = { version = "0.1.0", git = "https://github.com/querygraph/somme", rev = "c60ef84a496d709f88403d460fb21a86de4372a0" }
+somme-cli = { version = "0.1.1", git = "https://github.com/querygraph/somme", rev = "c66a0c0908599ce6f21626cfa9a30b86e4235a4c" }

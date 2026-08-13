@@ -236,7 +236,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -812,7 +812,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1118,8 +1118,8 @@ dependencies = [
 
 [[package]]
 name = "somme-cli"
-version = "0.1.0"
-source = "git+https://github.com/querygraph/somme?rev=c60ef84a496d709f88403d460fb21a86de4372a0#c60ef84a496d709f88403d460fb21a86de4372a0"
+version = "0.1.1"
+source = "git+https://github.com/querygraph/somme?rev=c66a0c0908599ce6f21626cfa9a30b86e4235a4c#c66a0c0908599ce6f21626cfa9a30b86e4235a4c"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1151,7 +1151,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "suffix-cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "clap",
