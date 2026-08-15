@@ -24,7 +24,7 @@ Positional account selectors operate for one invocation without changing
 the active profile.
 .SH COMMANDS
 .SS login
-\f[CR]suffix login [EMAIL] [\-u|\-\-app\-url URL] [\-e|\-\-email EMAIL] [\-a|\-\-account NAME] [\-n|\-\-name KEY\-NAME] [\-r|\-\-renew] [\-o|\-\-no\-open] [\-t|\-\-timeout SECONDS]\f[R]
+\f[CR]suffix login [EMAIL] [\-u|\-\-app\-url URL] [\-e|\-\-email EMAIL] [\-a|\-\-account NAME] [\-n|\-\-name KEY\-NAME] [\-r|\-\-renew] [\-d|\-\-device] [\-o|\-\-no\-open] [\-t|\-\-timeout SECONDS]\f[R]
 .PP
 Select a matching saved account or start browser approval and store a
 new API key.
@@ -32,10 +32,19 @@ The positional email and \f[CR]\-\-email\f[R] are equivalent and
 conflict when both are supplied.
 A matching stored key is reused unless \f[CR]\-\-renew\f[R] is present.
 \f[CR]\-\-account\f[R] selects the local profile name,
-\f[CR]\-\-name\f[R] labels a newly minted dashboard key,
-\f[CR]\-\-app\-url\f[R] changes the approval site,
-\f[CR]\-\-no\-open\f[R] prints rather than opens the URL, and
-\f[CR]\-\-timeout\f[R] defaults to 120 seconds.
+\f[CR]\-\-name\f[R] labels a newly minted dashboard key, and
+\f[CR]\-\-app\-url\f[R] changes the approval site.
+.PP
+Desktop login opens the approval page and receives the one\-time key
+through a loopback callback.
+Headless Linux login is detected automatically and uses device
+authorization: open the displayed HTTPS URL on another machine, verify
+the short code, and leave the CLI polling.
+\f[CR]\-\-device\f[R] selects that flow explicitly, and the legacy
+\f[CR]\-\-no\-open\f[R] option now implies \f[CR]\-\-device\f[R].
+The API key is delivered over HTTPS rather than exposed in a URL,
+\f[CR]curl\f[R] command, or shell history.
+\f[CR]\-\-timeout\f[R] defaults to 600 seconds.
 .SS logout
 \f[CR]suffix logout ACCOUNT\f[R]
 .PP
