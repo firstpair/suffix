@@ -29,10 +29,10 @@ suffix account
 suffix account personal
 ```
 
-Use `--no-open` to print the login URL instead of launching a browser:
+On a headless Linux host such as EC2, login automatically uses a device code instead of a loopback callback. Open the printed Suffix URL on any browser, confirm the short code, and leave the CLI running while it securely polls for approval. The API key is returned over HTTPS and is never placed in a `curl` command, URL, or shell history. Use `--device` to select this flow explicitly; `--no-open` is retained as an alias for headless device login:
 
 ```sh
-suffix login --account work --no-open
+suffix login person@example.com --device
 ```
 
 Environment variables override saved config:

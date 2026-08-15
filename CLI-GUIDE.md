@@ -28,9 +28,11 @@ All optional arguments have equivalent short and long forms. Positional account 
 
 ## login
 
-`suffix login [EMAIL] [-u|--app-url URL] [-e|--email EMAIL] [-a|--account NAME] [-n|--name KEY-NAME] [-r|--renew] [-o|--no-open] [-t|--timeout SECONDS]`
+`suffix login [EMAIL] [-u|--app-url URL] [-e|--email EMAIL] [-a|--account NAME] [-n|--name KEY-NAME] [-r|--renew] [-d|--device] [-o|--no-open] [-t|--timeout SECONDS]`
 
-Select a matching saved account or start browser approval and store a new API key. The positional email and `--email` are equivalent and conflict when both are supplied. A matching stored key is reused unless `--renew` is present. `--account` selects the local profile name, `--name` labels a newly minted dashboard key, `--app-url` changes the approval site, `--no-open` prints rather than opens the URL, and `--timeout` defaults to 120 seconds.
+Select a matching saved account or start browser approval and store a new API key. The positional email and `--email` are equivalent and conflict when both are supplied. A matching stored key is reused unless `--renew` is present. `--account` selects the local profile name, `--name` labels a newly minted dashboard key, and `--app-url` changes the approval site.
+
+Desktop login opens the approval page and receives the one-time key through a loopback callback. Headless Linux login is detected automatically and uses device authorization: open the displayed HTTPS URL on another machine, verify the short code, and leave the CLI polling. `--device` selects that flow explicitly, and the legacy `--no-open` option now implies `--device`. The API key is delivered over HTTPS rather than exposed in a URL, `curl` command, or shell history. `--timeout` defaults to 600 seconds.
 
 ## logout
 

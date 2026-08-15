@@ -114,12 +114,39 @@ struct LoginArgs {
     /// Mint and replace the saved key instead of reusing a matching local key.
     #[arg(short = 'r', long)]
     renew: bool,
-    /// Print the login URL instead of opening the browser.
+    /// Use headless device authorization.
+    #[arg(short = 'd', long)]
+    device: bool,
+    /// Do not open a browser; implies --device.
     #[arg(short = 'o', long)]
     no_open: bool,
     /// Seconds to wait for browser approval.
-    #[arg(short = 't', long, default_value_t = 120)]
+    #[arg(short = 't', long, default_value_t = 600)]
     timeout: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceAuthorization {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    verification_uri_complete: String,
+    expires_in: u64,
+    interval: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceCredential {
+    api_key: String,
+    api_base: String,
+}
+
+#[derive(Deserialize)]
+struct DeviceError {
+    error: String,
+    message: Option<String>,
 }
 
 #[derive(Args)]
@@ -721,6 +748,14 @@ fn login(args: LoginArgs) -> Result<()> {
         return Ok(());
     }
 
+    let key_name = args
+        .name
+        .clone()
+        .unwrap_or_else(|| default_key_name(&account));
+    if args.device || args.no_open || running_headless() {
+        return device_login(&args, &mut config, &account, &key_name, login_email);
+    }
+
     let listener =
         TcpListener::bind("127.0.0.1:0").context("could not bind the local login callback")?;
     listener
@@ -729,7 +764,6 @@ fn login(args: LoginArgs) -> Result<()> {
     let port = listener.local_addr()?.port();
     let state = random_state();
     let callback = format!("http://127.0.0.1:{port}/callback");
-    let key_name = args.name.unwrap_or_else(|| default_key_name(&account));
     let login_url = build_login_url(
         &args.app_url,
         &callback,
@@ -739,10 +773,9 @@ fn login(args: LoginArgs) -> Result<()> {
     )?;
 
     println!("Opening {login_url}");
-    if args.no_open {
-        println!("Paste that URL into your browser to continue.");
-    } else {
-        open::that(&login_url).context("could not open the browser")?;
+    if let Err(error) = open::that(&login_url) {
+        eprintln!("Could not open a local browser ({error}); switching to device login.");
+        return device_login(&args, &mut config, &account, &key_name, login_email);
     }
     eprintln!("Waiting for browser approval...");
 
@@ -760,7 +793,7 @@ fn login(args: LoginArgs) -> Result<()> {
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 bail!(
-                    "timed out waiting for browser approval; run `suffix login --no-open` if the browser did not open the approval page"
+                    "timed out waiting for browser approval; run `suffix login --device` on a headless machine"
                 )
             }
             Err(error) => return Err(error).context("could not accept the login callback"),
@@ -790,23 +823,7 @@ fn login(args: LoginArgs) -> Result<()> {
         .api_base
         .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
 
-    config.api_base = None;
-    config.api_key = None;
-    config.active_account = Some(account.clone());
-    config.accounts.insert(
-        account.clone(),
-        AccountConfig {
-            api_base: api_base.clone(),
-            api_key: Some(api_key),
-            email: login_email,
-            domain_count: None,
-            link_count: None,
-            visit_count: None,
-            last_checked_at: None,
-            last_error: None,
-        },
-    );
-    save_config(&config)?;
+    save_login(&mut config, &account, api_key, &api_base, login_email)?;
     respond(
         &mut stream,
         200,
@@ -814,6 +831,128 @@ fn login(args: LoginArgs) -> Result<()> {
     )?;
     println!("Saved {account} for {api_base}");
     Ok(())
+}
+
+fn device_login(
+    args: &LoginArgs,
+    config: &mut Config,
+    account: &str,
+    key_name: &str,
+    login_email: Option<String>,
+) -> Result<()> {
+    let endpoint = device_endpoint(&args.app_url)?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("could not build the device login HTTP client")?;
+    let response = client
+        .post(&endpoint)
+        .json(&json!({
+            "action": "start",
+            "name": key_name,
+            "email": login_email,
+        }))
+        .send()
+        .context("could not start device login")?;
+    let authorization: DeviceAuthorization = device_json(response, "start device login")?;
+
+    println!();
+    println!("Open {}", authorization.verification_uri);
+    println!("Enter code: {}", authorization.user_code);
+    println!("Direct link: {}", authorization.verification_uri_complete);
+    eprintln!("Waiting for browser approval...");
+
+    let wait_seconds = args.timeout.min(authorization.expires_in);
+    let deadline = Instant::now() + Duration::from_secs(wait_seconds);
+    let interval = Duration::from_secs(authorization.interval.max(1));
+    loop {
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for device approval; run `suffix login --device` to try again")
+        }
+        thread::sleep(interval);
+        let response = client
+            .post(&endpoint)
+            .json(&json!({ "action": "poll", "deviceCode": authorization.device_code }))
+            .send()
+            .context("could not check device login approval")?;
+        if response.status().as_u16() == 428 {
+            continue;
+        }
+        let credential: DeviceCredential = device_json(response, "complete device login")?;
+        save_login(
+            config,
+            account,
+            credential.api_key,
+            &credential.api_base,
+            login_email,
+        )?;
+        println!("Saved {account} for {}", credential.api_base);
+        return Ok(());
+    }
+}
+
+fn device_json<T: for<'de> Deserialize<'de>>(
+    response: reqwest::blocking::Response,
+    action: &str,
+) -> Result<T> {
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .with_context(|| format!("could not read response to {action}"))?;
+    if !status.is_success() {
+        if let Ok(error) = serde_json::from_slice::<DeviceError>(&bytes) {
+            bail!(
+                "{}: {}",
+                error.error,
+                error
+                    .message
+                    .unwrap_or_else(|| format!("Suffix returned HTTP {status}"))
+            )
+        }
+        bail!("Suffix returned HTTP {status} while trying to {action}")
+    }
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("Suffix returned an invalid response while trying to {action}"))
+}
+
+fn device_endpoint(app_url: &str) -> Result<String> {
+    let mut url = Url::parse(app_url).context("app URL must be absolute")?;
+    url.set_path("/api/cli-device");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+fn running_headless() -> bool {
+    cfg!(target_os = "linux")
+        && std::env::var_os("DISPLAY").is_none()
+        && std::env::var_os("WAYLAND_DISPLAY").is_none()
+}
+
+fn save_login(
+    config: &mut Config,
+    account: &str,
+    api_key: String,
+    api_base: &str,
+    email: Option<String>,
+) -> Result<()> {
+    config.api_base = None;
+    config.api_key = None;
+    config.active_account = Some(account.to_string());
+    config.accounts.insert(
+        account.to_string(),
+        AccountConfig {
+            api_base: api_base.to_string(),
+            api_key: Some(api_key),
+            email,
+            domain_count: None,
+            link_count: None,
+            visit_count: None,
+            last_checked_at: None,
+            last_error: None,
+        },
+    );
+    save_config(config)
 }
 
 fn add(args: AddArgs) -> Result<()> {
@@ -2606,6 +2745,27 @@ mod tests {
             params.get("email").map(|v| v.as_ref()),
             Some("person@example.com")
         );
+    }
+
+    #[test]
+    fn device_login_targets_the_control_host_api() {
+        assert_eq!(
+            device_endpoint("https://suffix.org/some/path?old=1").unwrap(),
+            "https://suffix.org/api/cli-device"
+        );
+    }
+
+    #[test]
+    fn login_accepts_explicit_device_mode() {
+        let cli =
+            Cli::try_parse_from(["suffix", "login", "person@example.com", "--device"]).unwrap();
+        match cli.command {
+            Some(Command::Login(args)) => {
+                assert!(args.device);
+                assert_eq!(args.timeout, 600);
+            }
+            _ => panic!("expected login command"),
+        }
     }
 
     #[test]
